@@ -23,6 +23,9 @@
   header { padding: 20px 24px; border-bottom: 1px solid var(--line); display: flex;
            align-items: baseline; gap: 16px; flex-wrap: wrap; }
   header h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: .2px; }
+  header h1 a { color: inherit; text-decoration: none; }
+  header h1 a:hover { color: var(--accent); }
+  header h1 a:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
   header p { margin: 0; color: var(--muted); font: 14px system-ui, sans-serif; }
   .ui { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 
@@ -151,7 +154,7 @@
 </head>
 <body>
 <header>
-  <h1>Boards Extractor</h1>
+  <h1><a href="/">Boards Extractor</a></h1>
   <p class="ui">Solution PDF &rarr; questions, solutions and LaTeX. Runs entirely on this computer.</p>
 </header>
 
