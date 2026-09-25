@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "Selfstudys Chapter Downloader",
+  "version": "1.0.0",
+  "description": "Opens each NCERT solution chapter on selfstudys.com, clicks its Download button and saves the PDFs into class/subject folders.",
+  "permissions": ["downloads", "storage", "scripting", "tabs", "alarms"],
+  "host_permissions": ["https://www.selfstudys.com/*"],
+  "background": { "service_worker": "background.js" },
+  "action": { "default_popup": "popup.html", "default_title": "Selfstudys Chapter Downloader" }
+}

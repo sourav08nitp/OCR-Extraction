@@ -1,0 +1,31 @@
+# Secrets - never commit these
+.env
+
+# Working data: uploads, extraction output, exported bundles
+jobs/
+exports/
+downloads/
+Chapters/
+out/
+selfstudys_structured/
+*.pdf
+*.zip
+experiments/molscribe_trial/struct/
+experiments/molscribe_trial/ocsr_results.json
+experiments/molscribe_trial/ocsr_compare.png
+
+# Caches and logs written as the app runs
+ai_cache.json
+ai_usage.json
+__pycache__/
+*.pyc
+
+# Big model weights
+models/
+*.pth
+
+# Local environments
+.venv/
+.venv-*/
+node_modules/
+.claude/

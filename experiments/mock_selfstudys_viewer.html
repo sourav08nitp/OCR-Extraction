@@ -1,0 +1,27 @@
+<!doctype html>
+<html><head><title>Mock selfstudys viewer</title></head>
+<body>
+<!-- mimics the real page: button hidden until quota check, first click shows class popup,
+     Save only closes the popup, the next Download click "downloads" -->
+<a href="javascript:void(0);" class="downloadPdfBtn hideThis" style="display:inline-block">DOWNLOAD PDF</a>
+<div class="modal" id="confirmClassPopup" style="display:none">
+  <p>Just to Confirm! Your Selected Class: 10</p>
+  <button class="confirmClassPopupBtnClick" data-value="no">Edit</button>
+  <button class="confirmClassPopupBtnClick" data-value="yes">Save</button>
+</div>
+<pre id="log"></pre>
+<style>.hideThis{display:none!important}</style>
+<script>
+  window.downloads = 0; let confirmed = false;
+  const log = t => document.getElementById("log").textContent += t + "\n";
+  setTimeout(() => document.querySelector(".downloadPdfBtn").classList.remove("hideThis"), 1200); // quota check
+  document.querySelector(".downloadPdfBtn").onclick = () => {
+    if (!confirmed) { const m = document.getElementById("confirmClassPopup"); m.style.display = "block"; m.classList.add("show"); log("popup shown"); return; }
+    window.downloads++; log("DOWNLOAD started");
+  };
+  document.querySelectorAll(".confirmClassPopupBtnClick").forEach(b => b.onclick = () => {
+    const m = document.getElementById("confirmClassPopup"); m.style.display = "none"; m.classList.remove("show");
+    if (b.dataset.value === "yes") { confirmed = true; log("class saved (no download)"); }
+  });
+</script>
+</body></html>

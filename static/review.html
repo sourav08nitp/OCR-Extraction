@@ -1,0 +1,844 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Review and Export</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a64; --line: #e3e1da;
+    --accent: #2f5d50; --accent-soft: #e4eee9; --warn: #b4611a; --warn-soft: #fbeee0; --err: #a33; --err-soft: #f7e3e3;
+    --ok: #2e7d4f; --hl: rgba(255, 196, 0, .28); --hl-line: #e0a800;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161715; --panel: #1f201e; --ink: #ecebe6; --muted: #9b9a93; --line: #34352f;
+      --accent: #7fbfa9; --accent-soft: #23332d; --warn: #e8a15b; --warn-soft: #3a2a1b; --err: #e77; --err-soft: #3a1f1f;
+      --ok: #6fcf97; --hl: rgba(255, 196, 0, .22); --hl-line: #f5c542;
+    }
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+         display: flex; flex-direction: column; }
+  a { color: var(--accent); }
+  button { font: 600 13px system-ui, sans-serif; padding: 7px 14px; border-radius: 8px; border: 0; background: var(--accent);
+           color: var(--panel); cursor: pointer; }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); }
+  button:disabled { opacity: .45; cursor: default; }
+  input, select, textarea { font: 14px system-ui, sans-serif; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+                            border-radius: 7px; padding: 6px 8px; width: 100%; }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+
+  header { display: flex; align-items: center; gap: 12px; padding: 10px 16px; border-bottom: 1px solid var(--line); flex-wrap: wrap; }
+  header h1 { font: 600 17px Georgia, serif; margin: 0; }
+  header .spacer { flex: 1; }
+  .progress { font-size: 13px; color: var(--muted); }
+  .progress b { color: var(--ink); }
+  #saveState { font-size: 12px; color: var(--muted); min-width: 70px; }
+
+  .split { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .pdfpane { border-right: 1px solid var(--line); display: flex; flex-direction: column; min-height: 0; }
+  .pdfbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--line); }
+  .pdfbar button { padding: 4px 10px; }
+  .pdfbar .pg { font-size: 13px; color: var(--muted); }
+  .pdfscroll { flex: 1; overflow: auto; padding: 16px; background: var(--bg); }
+  .pagewrap { position: relative; margin: 0 auto; box-shadow: 0 1px 6px rgba(0,0,0,.25); background: #fff; }
+  .pagewrap canvas { display: block; }
+  .hl { position: absolute; background: var(--hl); border: 2px solid var(--hl-line); border-radius: 3px; pointer-events: none; }
+  .pagewrap.cropping { cursor: crosshair; }
+  .pagewrap.cropping .hl { opacity: .3; }
+  .selbox { position: absolute; border: 2px dashed var(--accent); background: rgba(47, 93, 80, .18); pointer-events: none; }
+  .crophint { padding: 7px 12px; background: var(--accent); color: var(--panel); font-size: 13px; font-weight: 600; }
+
+  .side { display: flex; flex-direction: column; min-height: 0; }
+  .tabs { display: flex; gap: 4px; padding: 8px 12px 0; border-bottom: 1px solid var(--line); }
+  .tab { background: transparent; color: var(--muted); border-radius: 8px 8px 0 0; padding: 8px 14px; border: 1px solid transparent; border-bottom: 0; }
+  .tab.on { color: var(--ink); background: var(--panel); border-color: var(--line); margin-bottom: -1px; }
+  .sidebody { flex: 1; overflow-y: auto; padding: 14px 16px 60px; }
+
+  fieldset { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px 4px; margin: 0 0 14px; background: var(--panel); }
+  legend { font-weight: 700; padding: 0 6px; }
+  .field { display: grid; grid-template-columns: 150px minmax(0, 1fr); gap: 10px; align-items: center; margin-bottom: 10px; }
+  .field label { font-size: 13px; color: var(--muted); }
+  .field label .req { color: var(--warn); }
+  .hint { font-size: 12px; color: var(--muted); margin: -4px 0 10px 160px; }
+  .missing input, .missing select { border-color: var(--warn); background: var(--warn-soft); }
+
+  .filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .filters button { padding: 4px 12px; border-radius: 99px; font-weight: 500; background: var(--panel); color: var(--ink); border: 1px solid var(--line); }
+  .filters button.on { background: var(--accent); color: var(--panel); border-color: var(--accent); }
+  .qrow { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); margin-bottom: 8px; }
+  .qhead { display: flex; align-items: center; gap: 10px; padding: 9px 12px; cursor: pointer; }
+  .qhead .num { font-weight: 700; min-width: 54px; }
+  .qhead .snip { flex: 1; min-width: 0; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
+  .dot.done { background: var(--ok); } .dot.need { background: var(--warn); } .dot.flag { background: var(--err); } .dot.skip { background: var(--line); }
+  .qrow.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+  .qbody { padding: 4px 14px 14px; border-top: 1px solid var(--line); }
+  .auto { background: var(--bg); border-radius: 8px; padding: 10px 12px; margin: 10px 0 12px; }
+  .auto h4 { margin: 0 0 6px; font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--accent); }
+  .rich { font: 15px/1.6 Georgia, serif; overflow-x: auto; }
+  .rich img { zoom: .5; max-width: 200%; vertical-align: middle; background: #fff; border-radius: 3px; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+  .chip { font-size: 12px; border: 1px solid var(--line); border-radius: 99px; padding: 2px 9px; background: var(--panel); }
+  .chip.added { border-color: var(--accent); color: var(--accent); }
+  button.danger { border-color: var(--warn); color: var(--warn); }
+  .note { font-size: 12px; color: var(--warn); margin-top: 6px; }
+  .bulk { font-size: 12px; margin: -2px 0 8px 160px; }
+  .bulk a { cursor: pointer; }
+  .navbtns { display: flex; justify-content: space-between; margin-top: 8px; }
+  .tools { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .tools button { padding: 5px 11px; font-size: 12px; }
+  .auto.is-edited { outline: 1px dashed var(--accent); }
+  textarea.edit { font: 13px/1.45 ui-monospace, Consolas, monospace; resize: vertical; }
+  .imgwrap { position: relative; display: inline-block; }
+  .imgwrap .rm { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; padding: 0; border-radius: 50%;
+                 font-size: 11px; line-height: 22px; background: var(--err); color: #fff; opacity: .85; }
+  .imgwrap .rm:hover { opacity: 1; }
+  .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--panel);
+           padding: 8px 16px; border-radius: 8px; font-size: 13px; display: none; z-index: 5; }
+  .empty { color: var(--muted); padding: 30px 0; text-align: center; }
+
+  @media (max-width: 900px) {
+    .split { grid-template-columns: minmax(0, 1fr); grid-template-rows: 45vh minmax(0, 1fr); }
+    .pdfpane { border-right: 0; border-bottom: 1px solid var(--line); }
+    .field { grid-template-columns: minmax(0, 1fr); gap: 4px; }
+    .hint, .bulk { margin-left: 0; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <a id="back" href="/">&larr; Results</a>
+  <h1 id="title">Review &amp; export</h1>
+  <span class="spacer"></span>
+  <span class="progress" id="progress"></span>
+  <span id="saveState"></span>
+  <button class="ghost" id="addQBtn" hidden title="Draw a box round a question the extractor missed; the AI reads it and it becomes a new question">➕ Add question</button>
+  <button class="ghost" id="topicsBtn" hidden title="Asks the AI to give every question a topic (from the chapter's list) and a difficulty level">🏷 Fill topics &amp; levels with AI</button>
+  <button class="ghost" id="rereadBtn" hidden title="Sends every question's highlighted box to the AI and replaces its text. Questions you edited yourself are left alone.">✨ Re-read all with AI</button>
+  <button class="ghost" id="zipBtn" title="All images referenced by the export, for uploading to your storage">Images (.zip)</button>
+  <button class="ghost" id="bundleBtn" title="Save this chapter's questions.json and its images together in exports/">📦 Bundle</button>
+  <button class="ghost" id="pushBtn" hidden title="Bundle this chapter and send it to MongoDB">⬆ Push to MongoDB</button>
+  <button id="exportBtn">Export JSON</button>
+</header>
+
+<div class="split">
+  <section class="pdfpane">
+    <div class="pdfbar">
+      <button class="ghost" id="prevPg" aria-label="Previous page">&lsaquo;</button>
+      <span class="pg" id="pgLabel">Loading PDF…</span>
+      <button class="ghost" id="nextPg" aria-label="Next page">&rsaquo;</button>
+      <span class="spacer" style="flex:1"></span>
+      <button class="ghost" id="zoomOut" aria-label="Zoom out">−</button>
+      <button class="ghost" id="zoomIn" aria-label="Zoom in">+</button>
+    </div>
+    <div class="crophint" id="cropHint" hidden></div>
+    <div class="pdfscroll" id="pdfScroll"><div class="pagewrap" id="pageWrap"><canvas id="canvas"></canvas></div></div>
+  </section>
+
+  <section class="side">
+    <div class="tabs">
+      <button class="tab on" data-tab="questions">Questions</button>
+      <button class="tab" data-tab="document">Document</button>
+    </div>
+    <div class="sidebody" id="sideBody"></div>
+  </section>
+</div>
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const jobId = (location.hash.match(/job=([a-f0-9]+)/) || [])[1];
+let data = null, tab = "questions", filter = "all", openKey = null, expandAll = false;
+
+// ---------------- helpers ----------------
+function toast(msg) { const t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", 2600); }
+
+const imgSrc = ref => ref.startsWith("img:") ? `/api/jobs/${jobId}/images/${encodeURIComponent(ref.slice(4))}` : ref;
+
+// part: "stem" | "sol" -> images get a remove button
+function renderRich(text, part) {
+  if (!text) return `<span style="color:var(--muted)">—</span>`;
+  // maths is \(...\) inline and \[...\] display; $...$ is still rendered so older jobs keep working
+  return text.split(/(!\[\]\([^)]+\)|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\]|\$[^$]+\$)/g).map(p => {
+    const math = p.match(/^\\\(([\s\S]+)\\\)$|^\\\[([\s\S]+)\\\]$|^\$([\s\S]+)\$$/);
+    if (math) {
+      const tex = math[1] ?? math[2] ?? math[3];
+      const display = p.startsWith("\\[");
+      try { return katex.renderToString(tex, { throwOnError: true, strict: "ignore", displayMode: display }); }
+      catch { return `<code>${esc(p)}</code>`; }
+    }
+    const m = p.match(/^!\[\]\(([^)]+)\)$/);
+    if (m) {
+      const img = `<img src="${esc(imgSrc(m[1]))}" alt="image" loading="lazy">`;
+      return part ? `<span class="imgwrap">${img}<button class="rm" data-act="rm" data-part="${part}" data-ref="${esc(m[1])}" title="Remove this image from the question">✕</button></span>` : img;
+    }
+    return esc(p).replace(/\n/g, "<br>");
+  }).join("");
+}
+
+// current text: your edit (or the AI re-read) if there is one, else the automatic result
+const stemOf = q => q.manual.stemOverride ?? q.auto.stem;
+const solOf = q => q.manual.solutionOverride ?? q.auto.solutionText;
+const edited = q => q.manual.stemOverride != null || q.manual.solutionOverride != null;
+let editKey = null, aiBusy = null, tagBusy = null;
+
+// effective value: question override, else document default, else automatic
+function eff(q, f) {
+  const m = q.manual[f], d = data.document[f], a = q.auto[f];
+  for (const v of [m, d, a]) if (v !== undefined && v !== null && v !== "") return v;
+  return null;
+}
+function missing(q) {
+  const need = [];
+  for (const f of data.required) {
+    if (f === "module" || f === "subject") { if (!data.document[f]) need.push(f); continue; }
+    if (f === "chapter") { if (!(data.document.chapter || q.auto.chapter)) need.push(f); continue; }
+    if (eff(q, f) === null) need.push(f);
+  }
+  return need;
+}
+function status(q) {
+  if (q.manual.skip) return "skip";
+  const flagged = q.manual.flagged !== undefined && q.manual.flagged !== null ? q.manual.flagged : q.auto.flagged;
+  if (missing(q).length) return "need";
+  return flagged ? "flag" : "done";
+}
+
+// ---------------- saving ----------------
+let saveTimer = null;
+function scheduleSave() {
+  $("saveState").textContent = "Saving…";
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(save, 700);
+}
+async function save() {
+  const questions = {};
+  for (const q of data.questions) {
+    // an emptied text edit ("" override) is a real choice: keep it; other empty fields mean "use the default"
+    const keepEmpty = k => k === "stemOverride" || k === "solutionOverride";
+    const clean = Object.fromEntries(Object.entries(q.manual).filter(([k, v]) => v !== null && v !== undefined && (v !== "" || keepEmpty(k))));
+    if (Object.keys(clean).length) questions[q.key] = clean;
+  }
+  try {
+    const r = await fetch(`/api/jobs/${jobId}/review`, { method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ document: data.document, questions }) });
+    if (!r.ok) throw new Error(r.statusText);
+    $("saveState").textContent = "Saved";
+  } catch (e) { $("saveState").textContent = "Save failed"; toast("Could not save: " + e.message); }
+}
+
+// ---------------- PDF viewer ----------------
+pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
+let pdf = null, pageNo = 1, zoom = 1, renderTask = null, highlights = [];
+
+async function loadPdf() {
+  pdf = await pdfjsLib.getDocument(`/api/jobs/${jobId}/pdf`).promise;
+  await showPage(1);
+}
+async function showPage(n, regions) {
+  if (!pdf) return;
+  pageNo = Math.max(1, Math.min(pdf.numPages, n));
+  if (regions) highlights = regions;
+  const page = await pdf.getPage(pageNo);
+  const avail = $("pdfScroll").clientWidth - 32;
+  const base = page.getViewport({ scale: 1 });
+  const vp = page.getViewport({ scale: (avail / base.width) * zoom });
+  const c = $("canvas"), ratio = window.devicePixelRatio || 1;
+  c.width = Math.floor(vp.width * ratio); c.height = Math.floor(vp.height * ratio);
+  c.style.width = vp.width + "px"; c.style.height = vp.height + "px";
+  $("pageWrap").style.width = vp.width + "px";
+  if (renderTask) renderTask.cancel();
+  renderTask = page.render({ canvasContext: c.getContext("2d"), viewport: vp, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null });
+  try { await renderTask.promise; } catch { return; }
+  $("pgLabel").textContent = `Page ${pageNo} / ${pdf.numPages}`;
+  $("pageWrap").querySelectorAll(".hl").forEach(e => e.remove());
+  let first = null;
+  for (const r of highlights.filter(r => r.page === pageNo)) {
+    const [x0, y0, x1, y1] = r.bbox, pad = 2;
+    const d = document.createElement("div");
+    d.className = "hl";
+    Object.assign(d.style, { left: (x0 * vp.width - pad) + "px", top: (y0 * vp.height - pad) + "px",
+      width: ((x1 - x0) * vp.width + 2 * pad) + "px", height: ((y1 - y0) * vp.height + 2 * pad) + "px" });
+    $("pageWrap").appendChild(d);
+    first = first || d;
+  }
+  if (first) {
+    const sc = $("pdfScroll");
+    sc.scrollTop += first.getBoundingClientRect().top - sc.getBoundingClientRect().top - 40;
+  }
+}
+$("prevPg").onclick = () => showPage(pageNo - 1);
+$("nextPg").onclick = () => showPage(pageNo + 1);
+$("zoomIn").onclick = () => { zoom = Math.min(3, zoom * 1.2); showPage(pageNo); };
+$("zoomOut").onclick = () => { zoom = Math.max(.5, zoom / 1.2); showPage(pageNo); };
+window.addEventListener("resize", () => { clearTimeout(window._rz); window._rz = setTimeout(() => showPage(pageNo), 200); });
+
+// ---------------- crop a piece of the PDF into a question ----------------
+let cropMode = null;
+
+function startCrop(key, part) {
+  cropMode = { key, part };
+  $("pageWrap").classList.add("cropping");
+  $("cropHint").hidden = false;
+  $("cropHint").textContent = `Drag a box on the PDF to add it to the ${part === "stem" ? "question" : "answer"} — Esc to cancel`;
+}
+function startAddQuestion() {
+  cropMode = { add: true };
+  $("pageWrap").classList.add("cropping");
+  $("cropHint").hidden = false;
+  $("cropHint").textContent = "Drag a box round the whole question — its answer too, if it has one. The AI will read it. Esc to cancel";
+}
+function endCrop() {
+  cropMode = null;
+  $("pageWrap").classList.remove("cropping");
+  $("cropHint").hidden = true;
+  $("pageWrap").querySelectorAll(".selbox").forEach(e => e.remove());
+}
+document.addEventListener("keydown", e => { if (e.key === "Escape" && cropMode) endCrop(); });
+
+$("pageWrap").addEventListener("mousedown", e => {
+  if (!cropMode) return;
+  e.preventDefault();
+  const wrap = $("pageWrap"), rect = wrap.getBoundingClientRect();
+  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+  const box = document.createElement("div");
+  box.className = "selbox";
+  wrap.appendChild(box);
+  const draw = ev => {
+    const x = Math.max(0, Math.min(rect.width, ev.clientX - rect.left));
+    const y = Math.max(0, Math.min(rect.height, ev.clientY - rect.top));
+    Object.assign(box.style, { left: Math.min(sx, x) + "px", top: Math.min(sy, y) + "px",
+      width: Math.abs(x - sx) + "px", height: Math.abs(y - sy) + "px" });
+  };
+  const finish = async ev => {
+    document.removeEventListener("mousemove", draw);
+    document.removeEventListener("mouseup", finish);
+    draw(ev);
+    const b = box.getBoundingClientRect();
+    const bbox = [(b.left - rect.left) / rect.width, (b.top - rect.top) / rect.height,
+                  (b.right - rect.left) / rect.width, (b.bottom - rect.top) / rect.height];
+    const { key, part, add } = cropMode;
+    endCrop();
+    if (b.width < 8 || b.height < 8) { toast("That selection was too small"); return; }
+    if (add) return addQuestionFromBox(bbox);
+    try {
+      const r = await fetch(`/api/jobs/${jobId}/questions/${key}/crop`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ part, page: pageNo, bbox }) });
+      const j = await r.json();
+      if (!r.ok) throw new Error(j.error || r.statusText);
+      const q = data.questions.find(x => x.key === key);
+      q.manual[j.field] = j.text;
+      drawQuestions();
+      toast("Image added from the PDF");
+    } catch (err) { toast("Crop failed: " + err.message); }
+  };
+  document.addEventListener("mousemove", draw);
+  document.addEventListener("mouseup", finish);
+});
+
+// box on the PDF -> AI reads it -> a brand new question
+async function addQuestionFromBox(bbox) {
+  const btn = $("addQBtn");
+  btn.disabled = true;
+  btn.textContent = "Reading the box with AI…";
+  try {
+    const r = await fetch(`/api/jobs/${jobId}/questions/add`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ page: pageNo, bbox }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    await reloadReview();
+    openKey = j.key;          // open it straight away so the AI's reading can be checked
+    drawQuestions();
+    document.querySelector(`.qrow[data-key="${CSS.escape(j.key)}"]`)?.scrollIntoView({ block: "center" });
+    toast(j.stem ? `Added as question ${j.number} — check the text` : "Added, but the AI read no text in that box");
+  } catch (err) {
+    toast("Could not add: " + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "➕ Add question";
+  }
+}
+
+async function deleteAddedQuestion(key) {
+  if (!confirm("Delete this question you added? Any text you edited on it goes too.")) return;
+  try {
+    const r = await fetch(`/api/jobs/${jobId}/questions/${encodeURIComponent(key)}`, { method: "DELETE" });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    await reloadReview();
+    drawQuestions();
+    toast("Question deleted");
+  } catch (err) { toast("Could not delete: " + err.message); }
+}
+
+// ---------------- bundle + push to MongoDB ----------------
+$("bundleBtn").onclick = async () => {
+  const btn = $("bundleBtn");
+  btn.disabled = true; btn.textContent = "Bundling…";
+  try {
+    const r = await fetch(`/api/jobs/${jobId}/bundle`, { method: "POST" });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    toast(`Saved exports/${j.name}/ — ${j.questions} question(s), ${j.images} image(s)`
+          + (j.missing.length ? ` · ${j.missing.length} image file(s) missing` : ""));
+  } catch (e) { toast("Bundle failed: " + e.message); }
+  btn.disabled = false; btn.textContent = "📦 Bundle";
+};
+
+async function setUpMongo() {
+  let cfg;
+  try { cfg = await fetch("/api/mongo").then(r => r.json()); } catch { return; }
+  const btn = $("pushBtn");
+  btn.hidden = !cfg.available;          // no MONGODB_URI on the server: no button at all
+  if (!cfg.available) return;
+  const where = cfg.images === "supabase" ? `Supabase bucket "${cfg.bucket}"` : "GridFS";
+  btn.title = `Bundle this chapter and send it to ${cfg.db}.${cfg.collection}, images to ${where}`;
+  btn.onclick = async () => {
+    btn.disabled = true; btn.textContent = "Checking…";
+    try {
+      // first pass writes nothing: it reports exactly what would happen, then you confirm
+      const dry = await fetch(`/api/jobs/${jobId}/push`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ write: false }) }).then(async r => {
+          const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j; });
+      const ok = confirm(
+        `Send "${dry.chapter}" to ${dry.db}.${dry.collection}?\n\n`
+        + `${dry.questions} question(s) — added if new, updated if already there\n`
+        + `${dry.imagesStored} image(s) into GridFS, ${dry.imagesReused} already stored\n`
+        + (dry.missing.length ? `\n${dry.missing.length} image file(s) missing: ${dry.missing.slice(0,3).join(", ")}\n` : "")
+        + `\nThis writes to your live database.`);
+      if (!ok) { toast("Nothing sent"); return; }
+      btn.textContent = "Pushing…";
+      const res = await fetch(`/api/jobs/${jobId}/push`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ write: true }) }).then(async r => {
+          const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j; });
+      toast(`Pushed to ${res.db}.${res.collection}: ${res.new} new, ${res.updated} updated, `
+            + `${res.imagesStored} image(s) stored`);
+    } catch (e) { toast("Push failed: " + e.message); }
+    btn.disabled = false; btn.textContent = "⬆ Push to MongoDB";
+  };
+}
+
+async function reloadReview() {
+  const r = await fetch(`/api/jobs/${jobId}/review`);
+  if (!r.ok) throw new Error(r.statusText);
+  data = await r.json();
+}
+
+// ---------------- right side ----------------
+function drawProgress() {
+  const counts = { done: 0, need: 0, flag: 0, skip: 0 };
+  data.questions.forEach(q => counts[status(q)]++);
+  $("progress").innerHTML = `<b>${counts.done}</b> of ${data.questions.length - counts.skip} ready · ` +
+    `<span style="color:var(--warn)">${counts.need} need input</span> · <span style="color:var(--err)">${counts.flag} flagged</span>`;
+  return counts;
+}
+
+function draw() {
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("on", t.dataset.tab === tab));
+  drawProgress();
+  if (tab === "document") drawDocument(); else drawQuestions();
+}
+
+const DOC_FORM = [
+  ["Where these questions belong", [
+    ["module", "Module", "text", "e.g. Resonance, NCERT"],
+    ["chapter", "Chapter", "text", null],
+    ["subject", "Subject", "text", "e.g. Chemistry"],
+    ["section", "Path section", "text", "e.g. All sections"],
+  ]],
+  ["Defaults for every question (each question can override)", [
+    ["questionType", "Question type", "select", null],
+    ["level", "Level", "select", null],
+    ["topic", "Topic", "text", "Used when a question has no topic of its own"],
+    ["sectionName", "Section name", "text", "Used when the PDF has no exercise heading"],
+  ]],
+  ["Past papers (PYQ)", [
+    ["isPyq", "Is PYQ", "pyq", null],
+    ["pyqExam", "Exam", "text", "e.g. JEE-MAIN, NEET, CBSE"],
+    ["pyqYear", "Year", "text", "e.g. 2019"],
+    ["paper", "Paper", "text", "e.g. Shift 1"],
+  ]],
+  ["Topics (each question is tagged with one of these)", [
+    ["syllabusChapter", "Syllabus chapter", "syllabus", null],
+    ["topics", "Topic list", "topics", "One per line. Edit freely — questions can only be tagged with a topic from this list."],
+  ]],
+  ["Export", [
+    ["answerFrom", "Answer text goes to", "answerFrom", null],
+    ["imageBaseUrl", "Image base URL", "text", "Where you will upload the images (the zip). Default: images/"],
+  ]],
+];
+const REQ = f => data.required.includes(f);
+const syllabusKey = () => data.document.syllabusChapter || data.suggestedSyllabusChapter || "";
+// the list a question's topic must come from: your edited list, else the syllabus list for this chapter
+const currentTopics = () => (data.document.topics && data.document.topics.length)
+  ? data.document.topics : ((data.syllabus || {})[syllabusKey()] || []);
+
+function selectHtml(name, value, options, emptyLabel) {
+  return `<select data-f="${name}"><option value="">${esc(emptyLabel)}</option>` +
+    options.map(o => `<option value="${esc(o[0])}" ${String(value) === String(o[0]) ? "selected" : ""}>${esc(o[1])}</option>`).join("") + `</select>`;
+}
+
+function drawDocument() {
+  const d = data.document;
+  let html = "";
+  for (const [title, fields] of DOC_FORM) {
+    html += `<fieldset><legend>${esc(title)}</legend>`;
+    for (const [f, label, kind, hint] of fields) {
+      const v = d[f] ?? "";
+      let input;
+      if (kind === "select") input = selectHtml(f, v, data.options[f].map(o => [o, o]), "— choose —");
+      else if (kind === "pyq") input = selectHtml(f, v === true ? "yes" : v === false ? "no" : "", [["yes", "Yes, all are past-paper questions"], ["no", "No"]], "Detect from the text (e.g. [JEE-2005])");
+      else if (kind === "answerFrom") input = selectHtml(f, v, [["answer", "answer (always)"], ["explanation", "explanation (always)"]],
+        "Automatic: 'Answer' headings → answer, 'Solution' → explanation");
+      else if (kind === "syllabus") {
+        const keys = Object.keys(data.syllabus || {});
+        input = selectHtml(f, v || data.suggestedSyllabusChapter || "", keys.map(k => [k, k]), "— none —");
+      } else if (kind === "topics") {
+        const list = currentTopics();
+        input = `<textarea data-f="topics" rows="${Math.max(4, Math.min(12, list.length + 1))}">${esc(list.join("\n"))}</textarea>`;
+      }
+      else {
+        const ph = f === "chapter" ? (data.suggested.chapter ? `From the PDF: ${data.suggested.chapter}` : "Not found in the PDF") : "";
+        input = `<input data-f="${f}" value="${esc(v)}" placeholder="${esc(ph)}">`;
+      }
+      const miss = REQ(f) && !v && !(f === "chapter" && data.suggested.chapter);
+      html += `<div class="field ${miss ? "missing" : ""}"><label>${esc(label)}${REQ(f) ? ' <span class="req">*</span>' : ""}</label>${input}</div>`;
+      if (hint && kind !== "text") html += `<div class="hint">${esc(hint)}</div>`;
+      else if (hint && f !== "chapter") html += `<div class="hint">${esc(hint)}</div>`;
+    }
+    html += `</fieldset>`;
+  }
+  const src = (data.syllabusSources || {})[syllabusKey()];
+  if (src) html += `<p class="hint" style="margin-left:0">Topic list source: ${esc(src)}${data.document.topics && data.document.topics.length ? " (you have edited it)" : ""}</p>`;
+  html += `<p class="hint" style="margin-left:0">Fields marked <span style="color:var(--warn)">*</span> are required for export.
+    Document ID: <code>${esc(d.documentId || "created on first export")}</code></p>`;
+  $("sideBody").innerHTML = html;
+}
+
+$("sideBody").addEventListener("input", e => {
+  const el = e.target.closest("[data-f]");
+  if (!el) return;
+  const f = el.dataset.f, key = el.closest("[data-key]")?.dataset.key;
+  let v = el.type === "checkbox" ? el.checked : el.value;
+  if (f === "isPyq" || f === "flagged" || f === "skip") v = v === "yes" || v === true ? true : v === "no" ? false : v === "" ? null : v;
+  if (f === "topics") v = v.split("\n").map(s => s.trim()).filter(Boolean);
+  if (key) {
+    const q = data.questions.find(x => x.key === key);
+    q.manual[f] = v;
+    const row = el.closest(".qrow");
+    row.querySelector(".qhead .dot").className = "dot " + status(q);
+    row.querySelectorAll(".field").forEach(fd => {
+      const ff = fd.querySelector("[data-f]")?.dataset.f;
+      if (ff) fd.classList.toggle("missing", REQ(ff) && missing(q).includes(ff));
+    });
+  } else {
+    data.document[f] = v;
+    el.closest(".field")?.classList.toggle("missing", REQ(f) && !v && !(f === "chapter" && data.suggested.chapter));
+  }
+  drawProgress();
+  scheduleSave();
+});
+
+function drawQuestions() {
+  const counts = drawProgress();
+  const F = [["all", "All", data.questions.length], ["need", "Needs input", counts.need], ["flag", "Flagged", counts.flag], ["done", "Ready", counts.done]];
+  let html = `<div class="filters">${F.map(([id, l, n]) => `<button data-filter="${id}" class="${filter === id ? "on" : ""}">${l} ${n}</button>`).join("")}
+    <button data-expand="1" class="${expandAll ? "on" : ""}" title="Show every question's details at once">${expandAll ? "Collapse all" : "Expand all"}</button></div>`;
+  const list = data.questions.filter(q => filter === "all" || status(q) === filter);
+  if (!list.length) html += `<div class="empty">Nothing here.</div>`;
+  for (const q of list) {
+    const st = status(q), a = q.auto;
+    const snip = (stemOf(q) || "").replace(/\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\]|\$[^$]+\$/g, "…")
+      .replace(/!\[\]\([^)]+\)/g, "[image]").slice(0, 110);
+    html += `<div class="qrow ${openKey === q.key ? "sel" : ""}" data-key="${q.key}">
+      <div class="qhead"><span class="dot ${st}"></span><span class="num">Q ${esc(a.label)}</span>
+        <span class="snip">${esc(snip)}</span><span class="chip">p.${a.regions[0]?.page ?? "?"}</span></div>
+      ${expandAll || openKey === q.key ? questionBody(q) : ""}
+    </div>`;
+  }
+  $("sideBody").innerHTML = html;
+  const open = $("sideBody").querySelector(".qrow.sel");
+  if (open) open.scrollIntoView({ block: "nearest" });
+}
+
+function questionBody(q) {
+  const a = q.auto, m = q.manual, d = data.document;
+  const dflt = f => d[f] ? `Document default: ${d[f]}` : (a[f] ? `Automatic: ${a[f]}` : "— choose —");
+  const ansLabel = (d.answerFrom === "explanation" || (!d.answerFrom && a.solutionHeading !== "answer")) ? "Solution → explanation" : "Answer → answer";
+  const miss = missing(q);
+  const fld = (f, label, input) => `<div class="field ${REQ(f) && miss.includes(f) ? "missing" : ""}"><label>${label}${REQ(f) ? ' <span class="req">*</span>' : ""}</label>${input}</div>`;
+  const tri = (f, yes, no, emptyLabel) => selectHtml(f, m[f] === true ? "yes" : m[f] === false ? "no" : "", [["yes", yes], ["no", no]], emptyLabel);
+  const topics = [...new Set(data.questions.map(x => x.manual.topic).filter(Boolean).concat(d.topic ? [d.topic] : []))];
+  const allowed = currentTopics();
+  const source = m.aiReread ? `Re-read by AI (${esc(data.aiModel || "AI")}) — check it` : edited(q) ? "Edited by you" : "From the PDF (automatic)";
+  const busy = aiBusy === q.key;
+  const content = editKey === q.key ? `
+      <h4>Question</h4><textarea class="edit ed-stem" rows="5">${esc(stemOf(q))}</textarea>
+      <h4 style="margin-top:10px">${esc(ansLabel)}</h4><textarea class="edit ed-sol" rows="9">${esc(solOf(q))}</textarea>
+      <div class="hint" style="margin:4px 0 0">Maths goes between <code>\\(</code> and <code>\\)</code>, a whole line of maths between <code>\\[</code> and <code>\\]</code>. Images are the <code>![](img:…)</code> lines — delete a line to remove that image.</div>
+      <div class="tools"><button data-act="save-edit">Save text</button><button class="ghost" data-act="cancel-edit">Cancel</button></div>` : `
+      <div class="rich">${renderRich(stemOf(q), "stem")}</div>
+      <h4 style="margin-top:10px">${esc(ansLabel)}</h4>
+      <div class="rich">${renderRich(solOf(q), "sol")}</div>
+      <div class="tools">
+        <button class="ghost" data-act="edit">✎ Edit text</button>
+        <button class="ghost" data-act="crop-stem" title="Drag a box on the PDF to add that part of the page as an image in the question">✂ Crop → question</button>
+        <button class="ghost" data-act="crop-sol" title="Drag a box on the PDF to add that part of the page as an image in the answer">✂ Crop → answer</button>
+        ${data.aiAvailable ? `<button class="ghost" data-act="ai" ${busy ? "disabled" : ""} title="Sends the highlighted box to the AI and replaces the question and solution text with its reading">${busy ? "Reading with AI…" : "✨ Re-read with AI"}</button>` : ""}
+        ${data.aiAvailable ? `<button class="ghost" data-act="tag" ${tagBusy === q.key ? "disabled" : ""} title="Asks the AI for this one question's topic (from the chapter's list) and difficulty level">${tagBusy === q.key ? "Choosing…" : "🏷 Topic &amp; level with AI"}</button>` : ""}
+        ${edited(q) ? `<button class="ghost" data-act="reset" title="Throw away your edits / the AI reading">↺ Reset to automatic</button>` : ""}
+        ${a.added ? `<button class="ghost danger" data-act="delete-added" title="Remove this question you added by hand">🗑 Delete question</button>` : ""}
+      </div>`;
+  return `<div class="qbody">
+    <div class="auto ${edited(q) ? "is-edited" : ""}"><h4>${source}</h4>
+      ${content}
+      <div class="chips">
+        <span class="chip">No. ${esc(a.label)}</span><span class="chip">${esc(a.exercise)}</span>
+        ${a.added ? `<span class="chip added">added by hand</span>` : ""}
+        ${a.regions.map(r => `<span class="chip">page ${r.page}</span>`).join("")}
+        ${a.images.length + a.explanationImages.length ? `<span class="chip">${a.images.length + a.explanationImages.length} image(s)</span>` : ""}
+        ${a.isPyq ? `<span class="chip">PYQ detected: ${esc(a.pyqExam)} ${esc(a.pyqYear)}</span>` : ""}
+      </div>
+      ${a.notes.map(n => `<div class="note">⚠ ${esc(n)}</div>`).join("")}
+    </div>
+    ${fld("topic", "Topic", allowed.length
+      ? selectHtml("topic", m.topic || "", allowed.map(t => [t, t]), d.topic ? `Document default: ${d.topic}` : "— choose a topic —")
+      : `<input data-f="topic" list="topics" value="${esc(m.topic || "")}" placeholder="No topic list — set one on the Document tab"><datalist id="topics">${topics.map(t => `<option value="${esc(t)}">`).join("")}</datalist>`)}
+    <div class="bulk"><a data-bulk="topic">Copy this topic to the following questions without one</a></div>
+    ${a.added ? fld("questionNumber", "Question number", `<input data-f="questionNumber" value="${esc(m.questionNumber ?? "")}" placeholder="Guessed: ${esc(a.questionNumber)} — set the real number from the book">`) : ""}
+    ${fld("level", "Level", selectHtml("level", m.level || "", data.options.level.map(o => [o, o]), dflt("level")))}
+    ${fld("questionType", "Question type", selectHtml("questionType", m.questionType || "", data.options.questionType.map(o => [o, o]), dflt("questionType")))}
+    ${fld("sectionName", "Section name", `<input data-f="sectionName" value="${esc(m.sectionName || "")}" placeholder="${esc(a.sectionName ? "From the PDF: " + a.sectionName : (d.sectionName ? "Document default: " + d.sectionName : ""))}">`)}
+    ${fld("isPyq", "Past paper (PYQ)", tri("isPyq", "Yes", "No", a.isPyq ? `Detected: yes (${a.pyqExam} ${a.pyqYear})` : (d.isPyq === true ? "Document default: yes" : "Detected: no")))}
+    ${fld("pyqExam", "PYQ exam", `<input data-f="pyqExam" value="${esc(m.pyqExam || "")}" placeholder="${esc(a.pyqExam || d.pyqExam || "")}">`)}
+    ${fld("pyqYear", "PYQ year", `<input data-f="pyqYear" value="${esc(m.pyqYear || "")}" placeholder="${esc(a.pyqYear || d.pyqYear || "")}">`)}
+    ${fld("paper", "Paper", `<input data-f="paper" value="${esc(m.paper || "")}" placeholder="${esc(d.paper || "")}">`)}
+    ${fld("flagged", "Flagged", tri("flagged", "Yes, needs attention", "No", `Automatic: ${a.flagged ? "yes" : "no"}`))}
+    ${fld("skip", "Leave out of export", tri("skip", "Yes, skip this question", "No", "No"))}
+    <div class="navbtns"><button class="ghost" data-nav="-1">&larr; Previous</button><button class="ghost" data-nav="1">Next &rarr;</button></div>
+  </div>`;
+}
+
+function openQuestion(key) {
+  openKey = key;
+  const q = data.questions.find(x => x.key === key);
+  drawQuestions();
+  // highlight each line rather than one big box: figures often sit in a column beside the text
+  if (q && q.auto.regions.length) showPage(q.auto.regions[0].page, q.auto.lineRegions?.length ? q.auto.lineRegions : q.auto.regions);
+}
+
+$("sideBody").addEventListener("click", e => {
+  const fb = e.target.closest("[data-filter]");
+  if (fb) { filter = fb.dataset.filter; drawQuestions(); return; }
+  if (e.target.closest("[data-expand]")) { expandAll = !expandAll; drawQuestions(); return; }
+  const nav = e.target.closest("[data-nav]");
+  if (nav) {
+    const list = data.questions.filter(q => filter === "all" || status(q) === filter || q.key === openKey);
+    const i = list.findIndex(q => q.key === openKey) + Number(nav.dataset.nav);
+    if (list[i]) openQuestion(list[i].key);
+    return;
+  }
+  const act = e.target.closest("[data-act]");
+  if (act) { questionAction(act); return; }
+  const bulk = e.target.closest("[data-bulk]");
+  if (bulk) {
+    const f = bulk.dataset.bulk, src = data.questions.find(x => x.key === openKey);
+    const v = src.manual[f];
+    if (!v) { toast("Type a topic first"); return; }
+    let n = 0, after = false;
+    for (const q of data.questions) {
+      if (q.key === openKey) { after = true; continue; }
+      if (after && !q.manual[f]) { q.manual[f] = v; n++; }
+    }
+    toast(`Topic copied to ${n} question(s)`);
+    drawQuestions(); scheduleSave();
+    return;
+  }
+  const head = e.target.closest(".qhead");
+  if (head) {
+    const key = head.parentElement.dataset.key;
+    if (openKey === key && !expandAll) { openKey = null; drawQuestions(); } else openQuestion(key);
+  }
+});
+
+async function questionAction(btn) {
+  const key = btn.closest("[data-key]")?.dataset.key || openKey;   // several questions can be open at once
+  const q = data.questions.find(x => x.key === key);
+  if (!q) return;
+  const a = btn.dataset.act;
+  if (a === "rm") {
+    // remove one image from the question or solution; the text becomes "edited"
+    const field = btn.dataset.part === "stem" ? "stemOverride" : "solutionOverride";
+    const text = btn.dataset.part === "stem" ? stemOf(q) : solOf(q);
+    const token = `![](${btn.dataset.ref})`, i = text.indexOf(token);
+    if (i < 0) return;
+    q.manual[field] = (text.slice(0, i) + text.slice(i + token.length)).replace(/\n{3,}/g, "\n\n").trim();
+    toast("Image removed — ↺ Reset to automatic brings it back");
+  } else if (a === "crop-stem" || a === "crop-sol") {
+    startCrop(q.key, a === "crop-stem" ? "stem" : "sol");
+    return;
+  } else if (a === "delete-added") {
+    deleteAddedQuestion(q.key);
+    return;
+  } else if (a === "edit") {
+    editKey = q.key;
+  } else if (a === "cancel-edit") {
+    editKey = null;
+  } else if (a === "save-edit") {
+    const row = btn.closest(".qrow");
+    const s = row.querySelector(".ed-stem").value, t = row.querySelector(".ed-sol").value;
+    if (s !== stemOf(q)) q.manual.stemOverride = s;
+    if (t !== solOf(q)) q.manual.solutionOverride = t;
+    editKey = null;
+  } else if (a === "reset") {
+    if (!confirm("Throw away the edited text for this question and go back to the automatic result?")) return;
+    delete q.manual.stemOverride; delete q.manual.solutionOverride; delete q.manual.aiReread;
+  } else if (a === "ai") {
+    if (edited(q) && !confirm("This replaces your current text for this question with the AI's reading. Continue?")) return;
+    aiBusy = q.key; drawQuestions();
+    try {
+      const r = await fetch(`/api/jobs/${jobId}/questions/${q.key}/ai`, { method: "POST" });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || r.statusText);
+      Object.assign(q.manual, { stemOverride: j.stemOverride, solutionOverride: j.solutionOverride, aiReread: true });
+      toast(j.katexErrors && j.katexErrors.length ? `AI done — ${j.katexErrors.length} maths piece(s) may not display; please check`
+                                                  : "AI re-read done — please check it against the PDF");
+    } catch (err) { toast("AI re-read failed: " + err.message); }
+    aiBusy = null;
+  } else if (a === "tag") {
+    tagBusy = q.key; drawQuestions();
+    try {
+      const r = await fetch(`/api/jobs/${jobId}/questions/${q.key}/topic`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(j.error || r.statusText);
+      Object.assign(q.manual, j.value || {});
+      const got = Object.entries(j.value || {}).map(([k, v]) => `${k}: ${v}`).join(", ");
+      toast(got ? `AI chose ${got}` : "The AI could not place this question — choose by hand");
+    } catch (err) { toast("Could not tag: " + err.message); }
+    tagBusy = null;
+  }
+  drawQuestions();
+  scheduleSave();
+}
+
+document.querySelectorAll(".tab").forEach(t => t.onclick = () => { tab = t.dataset.tab; draw(); });
+
+// ---------------- export ----------------
+$("exportBtn").onclick = async () => {
+  await save();
+  const counts = drawProgress();
+  if (counts.need && !confirm(`${counts.need} question(s) still have required fields empty. Export anyway?`)) return;
+  const r = await fetch(`/api/jobs/${jobId}/export`);
+  if (!r.ok) { toast("Export failed"); return; }
+  const blob = await r.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = `questions_${jobId}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast(`Exported ${r.headers.get("X-Records")} questions`);
+  const again = await (await fetch(`/api/jobs/${jobId}/review`)).json();  // picks up the documentId made on export
+  data.document = again.document;
+};
+$("zipBtn").onclick = () => { save().then(() => { location.href = `/api/jobs/${jobId}/images.zip`; }); };
+
+// runs a background job on this document and follows it to the end
+async function runJob(btn, url, busyLabel, describe) {
+  const label = btn.textContent;
+  btn.disabled = true;
+  try {
+    const r = await fetch(url, { method: "POST" });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    while (true) {
+      await new Promise(s => setTimeout(s, 1500));
+      const st = await (await fetch(`/api/jobs/${jobId}`)).json();
+      if (st.total) btn.textContent = `${busyLabel} ${st.done}/${st.total}…`;
+      if (st.status === "done" || st.status === "error") {
+        if (st.status === "error") throw new Error(st.error);
+        toast(describe(st.result || {}));
+        break;
+      }
+    }
+    const fresh = await (await fetch(`/api/jobs/${jobId}/review`)).json();
+    data.questions.forEach(q => { const f = fresh.questions.find(x => x.key === q.key); if (f) q.manual = f.manual; });
+    data.document = fresh.document;
+    draw();
+  } catch (e) { toast(label.replace(/^[^ ]+ /, "") + " failed: " + e.message); }
+  btn.disabled = false;
+  btn.textContent = label;
+}
+
+$("topicsBtn").onclick = async () => {
+  const allowed = currentTopics();
+  if (!allowed.length) { toast("Pick a syllabus chapter on the Document tab first"); tab = "document"; draw(); return; }
+  const blank = data.questions.filter(q => !q.manual.topic || !q.manual.level).length;
+  if (!blank && !confirm("Every question already has a topic and a level. Do them again with the AI?")) return;
+  await save();
+  await runJob($("topicsBtn"), `/api/jobs/${jobId}/fill-topics${blank ? "" : "?redo=1"}`, "Tagging",
+    r => `Topic and level set for ${r.tagged || 0} question(s)` + (r.unplaced ? `, ${r.unplaced} incomplete` : ""));
+};
+
+$("rereadBtn").onclick = async () => {
+  const n = data.questions.length;
+  if (!confirm(`Send all ${n} questions to the AI (one call each)? Questions you edited yourself are kept as they are.`)) return;
+  await save();
+  const btn = $("rereadBtn");
+  btn.disabled = true;
+  try {
+    const r = await fetch(`/api/jobs/${jobId}/reread-all`, { method: "POST" });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    while (true) {                       // follow the job until it finishes
+      await new Promise(s => setTimeout(s, 1500));
+      const st = await (await fetch(`/api/jobs/${jobId}`)).json();
+      if (st.total) btn.textContent = `AI reading ${st.done}/${st.total}…`;
+      if (st.status === "done" || st.status === "error") {
+        if (st.status === "error") throw new Error(st.error);
+        const res = st.result || {};
+        toast(`AI re-read ${res.done || 0} question(s)` +
+              (res.withKatexWarnings ? `, ${res.withKatexWarnings} with maths to check` : "") +
+              (Object.keys(res.failed || {}).length ? `, ${Object.keys(res.failed).length} failed` : ""));
+        break;
+      }
+    }
+    const fresh = await (await fetch(`/api/jobs/${jobId}/review`)).json();
+    data.questions.forEach(q => { const f = fresh.questions.find(x => x.key === q.key); if (f) q.manual = f.manual; });
+    draw();
+  } catch (e) { toast("Re-read all failed: " + e.message); }
+  btn.disabled = false;
+  btn.textContent = "✨ Re-read all with AI";
+};
+
+// ---------------- start ----------------
+(async () => {
+  if (!jobId) { $("sideBody").innerHTML = `<div class="empty">No job selected. Open this page from a result.</div>`; return; }
+  $("back").href = `/#job=${jobId}`;
+  try {
+    const r = await fetch(`/api/jobs/${jobId}/review`);
+    if (!r.ok) throw new Error(r.status === 409 ? "this job has not finished yet" : r.statusText);
+    data = await r.json();
+  } catch (e) { $("sideBody").innerHTML = `<div class="empty">Could not load: ${esc(e.message)}</div>`; return; }
+  $("title").textContent = "Review & export" + (data.document.chapter || data.suggested.chapter ? " — " + (data.document.chapter || data.suggested.chapter) : "");
+  $("saveState").textContent = "";
+  $("rereadBtn").hidden = $("topicsBtn").hidden = $("addQBtn").hidden = !data.aiAvailable;
+  $("addQBtn").onclick = startAddQuestion;
+  setUpMongo();
+  draw();
+  loadPdf().catch(e => { $("pgLabel").textContent = "Could not load PDF"; });
+})();
+</script>
+</body>
+</html>

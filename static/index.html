@@ -1,0 +1,640 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Boards Extractor</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f5f1; --panel: #ffffff; --ink: #1d1d1b; --muted: #6b6a64; --line: #e3e1da;
+    --accent: #2f5d50; --accent-soft: #e4eee9; --warn: #b4611a; --warn-soft: #fbeee0; --err: #a33;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #161715; --panel: #1f201e; --ink: #ecebe6; --muted: #9b9a93; --line: #34352f;
+      --accent: #7fbfa9; --accent-soft: #23332d; --warn: #e8a15b; --warn-soft: #3a2a1b; --err: #e77;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 16px/1.55 Georgia, "Times New Roman", serif; }
+  header { padding: 20px 24px; border-bottom: 1px solid var(--line); display: flex;
+           align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  header h1 { margin: 0; font-size: 22px; font-weight: 600; letter-spacing: .2px; }
+  header p { margin: 0; color: var(--muted); font: 14px system-ui, sans-serif; }
+  .ui { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+
+  #upload { max-width: 640px; margin: 48px auto; padding: 0 16px; }
+  .drop { border: 2px dashed var(--line); border-radius: 14px; background: var(--panel);
+          padding: 44px 24px; text-align: center; cursor: pointer; transition: .15s; }
+  .drop.over, .drop:hover { border-color: var(--accent); background: var(--accent-soft); }
+  .drop strong { display: block; font-size: 18px; margin-bottom: 6px; }
+  .drop span { color: var(--muted); font-size: 14px; }
+  .file-name { margin-top: 12px; font-weight: 600; color: var(--accent); min-height: 1.4em; }
+  .row { display: flex; gap: 16px; align-items: center; justify-content: space-between;
+         margin-top: 16px; flex-wrap: wrap; }
+  label.opt { display: flex; gap: 8px; align-items: center; font-size: 14px; }
+  button { font: 600 15px system-ui, sans-serif; padding: 10px 22px; border-radius: 9px;
+           border: 0; background: var(--accent); color: var(--panel); cursor: pointer; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); padding: 7px 14px; font-size: 13px; }
+  .hint { color: var(--muted); font-size: 13px; margin-top: 10px; }
+  .bulkbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; }
+  .error { color: var(--err); font-size: 14px; margin-top: 12px; }
+  table.jobs { width: 100%; border-collapse: collapse; font-size: 13px; background: var(--panel);
+               border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+  table.jobs td { padding: 7px 10px; border-top: 1px solid var(--line); }
+  table.jobs tr:first-child td { border-top: 0; }
+  table.jobs .name { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  table.jobs .state { color: var(--muted); white-space: nowrap; }
+  table.jobs a.del { color: var(--err); cursor: pointer; }
+  table.jobs .links { text-align: right; white-space: nowrap; }
+  table.jobs a { color: var(--accent); text-decoration: none; font-weight: 600; }
+
+  #progress { max-width: 640px; margin: 64px auto; padding: 0 16px; display: none; }
+  .bar { height: 10px; background: var(--line); border-radius: 99px; overflow: hidden; margin: 14px 0 8px; }
+  .bar > div { height: 100%; width: 0; background: var(--accent); transition: width .3s; }
+  .bar.indeterminate > div { width: 30%; animation: slide 1.2s infinite ease-in-out; }
+  @keyframes slide { from { margin-left: -30%; } to { margin-left: 100%; } }
+
+  #result { display: none; }
+  .stats { display: flex; gap: 10px; flex-wrap: wrap; padding: 14px 24px; border-bottom: 1px solid var(--line);
+           align-items: center; }
+  .chip { background: var(--panel); border: 1px solid var(--line); border-radius: 99px; padding: 4px 12px; font-size: 13px; }
+  .chip b { font-weight: 700; }
+  .chip.warn { border-color: var(--warn); color: var(--warn); }
+  button.chip { font: 13px system-ui, sans-serif; color: var(--ink); cursor: pointer; }
+  button.chip.warn { color: var(--warn); }
+  button.chip.link:hover { border-color: var(--accent); background: var(--accent-soft); }
+
+  dialog#panel { width: min(1000px, calc(100vw - 32px)); height: calc(100vh - 48px); padding: 0; overflow: hidden;
+                 border: 1px solid var(--line); border-radius: 14px; background: var(--panel); color: var(--ink); }
+  dialog#panel[open] { display: flex; flex-direction: column; }
+  dialog#panel::backdrop { background: rgba(0, 0, 0, .55); }
+  .panel-head { display: flex; align-items: baseline; gap: 12px; padding: 14px 18px; border-bottom: 1px solid var(--line); }
+  .panel-head .ghost { margin-left: auto; }
+  #panelBody { flex: 1; min-height: 0; padding: 12px 18px 20px; overflow-y: auto; overflow-x: hidden; }
+  .prow > * { min-width: 0; }
+  .pimg { overflow-x: auto; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 12px; }
+  .tab { font: 13px system-ui, sans-serif; padding: 5px 12px; border-radius: 99px; border: 1px solid var(--line);
+         background: var(--bg); color: var(--ink); cursor: pointer; }
+  .tab.on { background: var(--accent); color: var(--panel); border-color: var(--accent); }
+  .prow { display: grid; grid-template-columns: minmax(0, 1.1fr) 24px minmax(0, 1.4fr) minmax(0, .9fr); gap: 12px;
+          align-items: center; padding: 12px 0; border-top: 1px solid var(--line); }
+  .pimg .eq-img { zoom: .5; }
+  .parrow { color: var(--muted); text-align: center; }
+  .pres .rendered { font-size: 18px; overflow-x: auto; overflow-y: hidden; margin-bottom: 4px; }
+  .pres code, .pres code.old { display: block; font-size: 12px; white-space: pre-wrap; word-break: break-all;
+                               background: var(--bg); border-radius: 6px; padding: 4px 6px; margin-top: 2px; }
+  .pres code.old { opacity: .7; }
+  .pmeta { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; font-size: 12px; }
+  .pmeta a { color: var(--accent); }
+  .badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
+  .badge.warn { background: var(--warn-soft); color: var(--warn); }
+  .muted { color: var(--muted); }
+  .small { font-size: 11px; margin-top: 4px; }
+  #panelBody .more { margin-top: 12px; }
+  @media (max-width: 760px) {
+    .prow { grid-template-columns: minmax(0, 1fr); gap: 6px; }
+    .parrow { display: none; }
+    dialog#panel { width: calc(100vw - 16px); height: calc(100vh - 16px); }
+    .panel-head .muted { display: none; }
+    .panel-head, #panelBody { padding-left: 12px; padding-right: 12px; }
+  }
+  a.chip { color: var(--accent); text-decoration: none; font-weight: 600; }
+  a.chip:hover { border-color: var(--accent); }
+  .stats .spacer { flex: 1; }
+  .layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); min-height: calc(100vh - 130px); }
+  .layout > * { min-width: 0; }
+  nav { border-right: 1px solid var(--line); padding: 16px 12px; position: sticky; top: 0;
+        max-height: 100vh; overflow-y: auto; font-size: 14px; }
+  nav h3 { font-size: 12px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted);
+           margin: 16px 8px 6px; }
+  nav .qs { display: flex; flex-wrap: wrap; gap: 4px; padding: 0 6px; }
+  nav a { display: inline-block; min-width: 32px; text-align: center; padding: 3px 6px; border-radius: 6px;
+          color: var(--ink); text-decoration: none; border: 1px solid var(--line); background: var(--panel); }
+  nav a:hover { border-color: var(--accent); }
+  nav a.has-review { border-color: var(--warn); color: var(--warn); }
+  main { padding: 8px 32px 80px; max-width: 920px; }
+  main h2 { font-size: 24px; margin: 36px 0 8px; padding-bottom: 6px; border-bottom: 2px solid var(--ink); }
+  .q { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px 22px; margin: 16px 0; }
+  .q-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
+  .q-head h4 { margin: 0; font-size: 17px; }
+  .q-head span { color: var(--muted); font-size: 12px; }
+  .label { font: 700 11px system-ui, sans-serif; text-transform: uppercase; letter-spacing: 1px;
+           color: var(--accent); margin: 14px 0 4px; }
+  .body .ln { min-height: 1.2em; margin: 3px 0; overflow-x: auto; overflow-y: hidden; }
+  .math { cursor: pointer; border-radius: 4px; padding: 0 2px; }
+  .math:hover { background: var(--accent-soft); }
+  /* crops are rendered at 200 DPI; zoom brings them to roughly the body text size */
+  .eq-img { vertical-align: middle; background: #fff; border-radius: 3px; max-width: 200%; zoom: .5; }
+  .figure { display: block; margin: 8px 0; }
+  .figure .eq-img { max-width: 200%; }
+  .review { display: inline-flex; align-items: center; gap: 4px; border: 1px dashed var(--warn);
+            background: var(--warn-soft); border-radius: 5px; padding: 1px 3px; vertical-align: middle; }
+  .review small { color: var(--warn); font: 600 10px system-ui, sans-serif; }
+  .orig { display: block; margin: 6px 0; padding: 8px; border: 1px solid var(--line); border-radius: 8px;
+          background: var(--bg); font: 12px system-ui, sans-serif; color: var(--muted); }
+  .orig img { display: block; margin-top: 4px; }
+  .orig code { display: block; margin-top: 4px; white-space: pre-wrap; word-break: break-all; color: var(--ink); }
+
+  @media (max-width: 760px) {
+    .layout { grid-template-columns: minmax(0, 1fr); }
+    .q { padding: 14px 14px; }
+    nav { position: static; max-height: none; border-right: 0; border-bottom: 1px solid var(--line); }
+    main { padding: 8px 16px 60px; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>Boards Extractor</h1>
+  <p class="ui">Solution PDF &rarr; questions, solutions and LaTeX. Runs entirely on this computer.</p>
+</header>
+
+<section id="upload" class="ui">
+  <div class="drop" id="drop">
+    <strong>Drop solution PDFs here</strong>
+    <span>or click to choose files — you can pick several at once</span>
+    <div class="file-name" id="fileName"></div>
+  </div>
+  <input type="file" id="file" accept="application/pdf,.pdf" hidden multiple>
+  <div class="row">
+    <div>
+      <label class="opt"><input type="checkbox" id="latex" checked> Convert formula images to LaTeX</label>
+      <label class="opt" id="aiOpt" hidden><input type="checkbox" id="ai" checked> Use AI (<span id="aiModel"></span>) for formulas the local model can't read</label>
+    </div>
+    <button id="go" disabled>Extract</button>
+  </div>
+  <div class="hint">With LaTeX on, a 65-page chapter takes around 5 minutes on the GPU (about 8 on CPU only). Without it, under a minute.</div>
+  <div class="error" id="uploadErr"></div>
+  <div id="jobList"></div>
+</section>
+
+<section id="progress" class="ui">
+  <strong id="pTitle">Working&hellip;</strong>
+  <div class="bar" id="bar"><div></div></div>
+  <div class="hint" id="pText"></div>
+  <div class="error" id="pErr"></div>
+</section>
+
+<section id="result">
+  <div class="stats ui" id="stats"></div>
+  <div class="layout">
+    <nav class="ui" id="nav"></nav>
+    <main id="content"></main>
+  </div>
+</section>
+
+<dialog id="panel" class="ui">
+  <div class="panel-head">
+    <strong>Formulas</strong>
+    <span class="muted small">Original image &rarr; what it became, and who read it</span>
+    <button class="ghost" id="panelClose" aria-label="Close">Close</button>
+  </div>
+  <div id="panelBody"></div>
+</dialog>
+
+<script>
+const $ = id => document.getElementById(id);
+let chosen = [], jobId = null, doc = null;
+
+// ---------- upload (one or many PDFs) ----------
+const drop = $("drop"), fileInput = $("file");
+drop.onclick = () => fileInput.click();
+fileInput.onchange = () => pick(fileInput.files);
+drop.ondragover = e => { e.preventDefault(); drop.classList.add("over"); };
+drop.ondragleave = () => drop.classList.remove("over");
+drop.ondrop = e => { e.preventDefault(); drop.classList.remove("over"); pick(e.dataTransfer.files); };
+
+function pick(files) {
+  $("uploadErr").textContent = "";
+  const all = [...(files || [])];
+  const pdfs = all.filter(f => /\.pdf$/i.test(f.name));
+  if (!all.length) return;
+  if (!pdfs.length) { $("uploadErr").textContent = "Please choose .pdf files."; return; }
+  if (pdfs.length < all.length) $("uploadErr").textContent = `${all.length - pdfs.length} file(s) skipped — only PDFs are accepted.`;
+  chosen = pdfs;
+  const mb = pdfs.reduce((a, f) => a + f.size, 0) / 1048576;
+  $("fileName").textContent = pdfs.length === 1
+    ? `${pdfs[0].name} (${mb.toFixed(1)} MB)`
+    : `${pdfs.length} PDFs selected (${mb.toFixed(1)} MB)`;
+  $("go").textContent = pdfs.length > 1 ? `Extract ${pdfs.length} PDFs` : "Extract";
+  $("go").disabled = false;
+}
+
+async function uploadOne(file) {
+  const fd = new FormData();
+  fd.append("pdf", file);
+  fd.append("latex", $("latex").checked ? "1" : "0");
+  fd.append("ai", aiConfig.ai_available && $("ai").checked ? "1" : "0");
+  const r = await fetch("/api/upload", { method: "POST", body: fd });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j.job_id;
+}
+
+$("go").onclick = async () => {
+  if (!chosen.length) return;
+  $("go").disabled = true;
+  const files = chosen, ids = [], failed = [];
+  for (const [i, f] of files.entries()) {
+    $("go").textContent = files.length > 1 ? `Uploading ${i + 1}/${files.length}…` : "Uploading…";
+    try { ids.push(await uploadOne(f)); } catch (e) { failed.push(`${f.name}: ${e.message}`); }
+  }
+  $("go").textContent = "Extract";
+  if (failed.length) $("uploadErr").textContent = "Could not upload " + failed.join("; ");
+  if (!ids.length) { $("go").disabled = false; return; }
+  if (ids.length === 1 && !failed.length) {       // single file: watch it straight away
+    jobId = ids[0];
+    history.replaceState(null, "", "#job=" + jobId);
+    showProgress();
+    return;
+  }
+  // several: they queue up and run one after another; follow them in the list below
+  chosen = [];
+  $("fileName").textContent = `${ids.length} PDFs queued — they run one at a time`;
+  $("go").disabled = true;
+  drawJobList();
+};
+
+// ---------- progress ----------
+function showProgress() {
+  $("upload").style.display = "none";
+  $("result").style.display = "none";
+  $("pErr").textContent = "";
+  $("progress").style.display = "block";
+  poll();
+}
+
+const STAGES = {
+  "pages": "Reading pages and cropping formulas",
+  "symbols": "Reading single symbols",
+  "preparing formulas": "Preparing formulas for the LaTeX model",
+  "latex": "Converting formulas to LaTeX",
+  "AI checking formulas and figures": "AI is checking the images the local model couldn't read (formula or figure?)",
+  "loading LaTeX model": "Loading the LaTeX model (first run only)",
+  "waiting in queue": "Waiting for the previous job to finish",
+};
+
+async function poll() {
+  let j;
+  try {
+    const r = await fetch(`/api/jobs/${jobId}`);
+    if (r.status === 404) { $("pErr").textContent = "This job no longer exists (the server was restarted). Upload again."; addRestart($("progress")); return; }
+    j = await r.json();
+  } catch { setTimeout(poll, 2000); return; }
+
+  if (j.status === "error") { $("pErr").textContent = j.error; addRestart($("progress")); return; }
+  if (j.status === "done") { loadResult(); return; }
+
+  $("pTitle").textContent = STAGES[j.stage] || j.stage;
+  const bar = $("bar");
+  if (j.total) {
+    bar.classList.remove("indeterminate");
+    bar.firstElementChild.style.width = (100 * j.done / j.total).toFixed(1) + "%";
+    $("pText").textContent = `${j.filename} — ${j.done} of ${j.total}`;
+  } else {
+    bar.classList.add("indeterminate");
+    bar.firstElementChild.style.width = "";
+    $("pText").textContent = j.filename;
+  }
+  setTimeout(poll, 1000);
+}
+
+function addRestart(where) {
+  if (where.querySelector(".restart")) return;
+  const b = document.createElement("button");
+  b.className = "ghost restart"; b.textContent = "Upload another PDF"; b.style.marginTop = "14px";
+  b.onclick = () => { location.hash = ""; location.reload(); };
+  where.appendChild(b);
+}
+
+// ---------- results ----------
+async function loadResult() {
+  const r = await fetch(`/api/jobs/${jobId}/result`);
+  doc = await r.json();
+  $("progress").style.display = "none";
+  $("result").style.display = "block";
+  render();
+}
+
+const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const imgUrl = name => `/api/jobs/${jobId}/images/${encodeURIComponent(name)}`;
+
+function renderSection(sec) {
+  const eqs = sec.equations_latex || null;
+  let reviewCount = 0;
+  const lines = sec.text.split("\n").map(line => {
+    const html = line.split(/(\[\[eq:[^\]]+\]\])/).map(part => {
+      const m = part.match(/^\[\[eq:([^\]]+)\]\]$/);
+      if (!m) return esc(part);
+      const name = m[1], info = eqs && eqs[name];
+      if (info && info.source === "figure") {
+        return `<span class="figure" data-eq="${esc(name)}" title="Figure: kept as an image"><img class="eq-img" src="${imgUrl(name)}" alt="figure ${esc(name)}"></span>`;
+      }
+      if (info && !info.needs_review && info.latex === "") return "";
+      if (info && !info.needs_review && info.latex) {
+        try {
+          const out = katex.renderToString(info.latex, { throwOnError: true, displayMode: false, strict: "ignore" });
+          return `<span class="math" data-eq="${esc(name)}" title="Click to compare with the original image">${out}</span>`;
+        } catch { /* fall through to the image */ }
+      }
+      if (eqs) reviewCount++;
+      const img = `<img class="eq-img" src="${imgUrl(name)}" alt="formula ${esc(name)}">`;
+      return eqs ? `<span class="review" title="Needs review: kept as the original image">${img}<small>check</small></span>` : img;
+    }).join("");
+    return `<div class="ln">${html}</div>`;
+  }).join("");
+  return { html: lines, reviewCount };
+}
+
+function render() {
+  const all = {};
+  const where = {};  // formula name -> where it first appears
+  doc.exercises.forEach((ex, ei) => ex.questions.forEach((q, qi) => ["question", "solution"].forEach(k => {
+    Object.assign(all, q[k].equations_latex || {});
+    for (const n of Object.keys(q[k].equations_latex || {})) {
+      if (!where[n]) where[n] = { anchor: `q${ei}_${qi}`, label: `${ex.title} · Q${q.number} · ${k}` };
+    }
+  })));
+  window._where = where;
+  const vals = Object.values(all);
+  const nQ = doc.exercises.reduce((a, e) => a + e.questions.length, 0);
+  const hasLatex = vals.length > 0;
+  const glyph = vals.filter(v => v.source === "glyph" && !v.needs_review).length;
+  const review = vals.filter(v => v.needs_review).length;
+  const byAi = vals.filter(v => v.source === "ai" && !v.needs_review).length;
+  const figures = vals.filter(v => v.source === "figure").length;
+
+  let navHtml = "", body = "";
+  doc.exercises.forEach((ex, ei) => {
+    navHtml += `<h3>${esc(ex.title)}</h3><div class="qs">`;
+    body += `<h2 id="ex${ei}">${esc(ex.title)}</h2>`;
+    ex.questions.forEach((q, qi) => {
+      const qs = renderSection(q.question), ss = renderSection(q.solution);
+      const rc = qs.reviewCount + ss.reviewCount;
+      const anchor = `q${ei}_${qi}`;
+      navHtml += `<a href="#" data-target="${anchor}" class="${rc ? "has-review" : ""}" title="${rc ? rc + " formula(s) to check" : ""}">${q.number}</a>`;
+      body += `<article class="q" id="${anchor}">
+        <div class="q-head"><h4>Question ${q.number}</h4><span class="ui">page ${q.page_start}${rc ? ` · ${rc} to check` : ""}</span></div>
+        <div class="label">Question</div><div class="body">${qs.html}</div>
+        <div class="label">Solution</div><div class="body">${ss.html}</div>
+      </article>`;
+    });
+    navHtml += `</div>`;
+  });
+
+  $("stats").innerHTML = `
+    <span class="chip"><b>${doc.exercises.length}</b> exercises</span>
+    <span class="chip"><b>${nQ}</b> questions</span>
+    ${hasLatex ? `
+      <button class="chip link" data-tab="all"><b>${vals.length}</b> images</button>
+      <button class="chip link" data-tab="latex"><b>${vals.length - review - figures}</b> as LaTeX</button>
+      ${figures ? `<button class="chip link" data-tab="figure"><b>${figures}</b> figures</button>` : ""}
+      ${byAi ? `<button class="chip link" data-tab="ai"><b>${byAi}</b> by AI</button>` : ""}
+      <button class="chip link warn" data-tab="review"><b>${review}</b> to check</button>
+      ${review && aiConfig.ai_available ? `<button class="ghost" id="aiFix">Fix ${review} with AI</button>` : ""}` : `<span class="chip">LaTeX conversion off</span>`}
+    <span class="spacer"></span>
+    <a class="chip" href="/review#job=${jobId}" style="background:var(--accent);color:var(--panel);border-color:var(--accent)">Review &amp; export &rarr;</a>
+    <a class="chip" href="/api/jobs/${jobId}/result" download="structured.json">Raw JSON</a>
+    <button class="ghost" id="again">Upload another PDF</button>`;
+  $("again").onclick = () => { location.hash = ""; location.reload(); };
+  $("nav").innerHTML = navHtml;
+  $("content").innerHTML = body;
+  window._eqs = all;
+  if ($("aiFix")) $("aiFix").onclick = startAiFix;
+  $("stats").querySelectorAll("[data-tab]").forEach(b => b.onclick = () => openPanel(b.dataset.tab));
+}
+
+// ---------- formula panel: every formula with its image, result and origin ----------
+const PANEL_TABS = [
+  ["all", "All", v => true],
+  ["latex", "As LaTeX", v => !v.needs_review && v.source !== "figure"],
+  ["figure", "Figures (kept as images)", v => v.source === "figure"],
+  ["ai", "By AI", v => v.source === "ai" && !v.needs_review],
+  ["pix2tex", "By pix2tex", v => v.source === "pix2tex" && !v.needs_review],
+  ["glyph", "By symbol matcher", v => v.source === "glyph" && !v.needs_review],
+  ["review", "To check", v => v.needs_review],
+];
+const SOURCE_LABEL = { glyph: "symbol matcher", pix2tex: "pix2tex (local model)", ai: "AI", figure: "figure" };
+const PAGE = 60;
+let panelTab = "all", panelShown = PAGE;
+
+function openPanel(tab) {
+  panelTab = tab; panelShown = PAGE;
+  drawPanel();
+  $("panel").showModal();
+}
+
+function mathOrNote(tex) {
+  if (tex === "") return `<span class="muted">(blank image, dropped)</span>`;
+  if (!tex) return `<span class="muted">—</span>`;
+  try { return katex.renderToString(tex, { throwOnError: true, strict: "ignore" }); }
+  catch { return `<span class="muted">does not render</span>`; }
+}
+
+function drawPanel() {
+  const entries = Object.entries(window._eqs || {});
+  const tabs = PANEL_TABS.map(([id, label, f]) => {
+    const n = entries.filter(([, v]) => f(v)).length;
+    return n || id === panelTab ? `<button class="tab ${id === panelTab ? "on" : ""}" data-tab="${id}">${label} <b>${n}</b></button>` : "";
+  }).join("");
+  const filter = PANEL_TABS.find(t => t[0] === panelTab)[2];
+  const list = entries.filter(([, v]) => filter(v));
+
+  const rows = list.slice(0, panelShown).map(([name, v]) => {
+    const w = window._where[name] || {};
+    const by = v.source === "ai" ? `AI (${esc(v.model || "?")})` : esc(SOURCE_LABEL[v.source] || v.source || "?");
+    let result, notes = "";
+    if (v.source === "figure") {
+      result = `<span class="badge">kept as image</span>`;
+      notes += `<div class="muted small">Why: ${esc(v.reason || "figure")}</div>`;
+    } else if (v.needs_review) {
+      result = `<span class="badge warn">kept as image</span>`;
+      const why = v.ai_error ? `AI: ${v.ai_error}` : v.katex_error ? `LaTeX did not render: ${v.katex_error}` :
+                  v.reason ? v.reason :
+                  v.source === "glyph" ? "symbol matcher not confident" : "not confident";
+      notes += `<div class="muted small">Why: ${esc(why)}</div>`;
+      if (v.latex) notes += `<div class="muted small">Local guess:</div><code>${esc(v.latex)}</code>`;
+    } else {
+      result = `<div class="rendered">${mathOrNote(v.latex)}</div><code>${esc(v.latex || "")}</code>`;
+    }
+    if (v.source === "ai" && v.raw) notes += `<div class="muted small">Local model's reading (not trusted, so AI was asked):</div><code class="old">${esc(v.raw)}</code>`;
+    if (v.confidence != null) notes += `<div class="muted small">Match confidence ${v.confidence}</div>`;
+    return `<div class="prow">
+      <div class="pimg"><img class="eq-img" loading="lazy" src="${imgUrl(name)}" alt="${esc(name)}"><div class="muted small">${esc(name)}</div></div>
+      <div class="parrow">&rarr;</div>
+      <div class="pres">${result}${notes}</div>
+      <div class="pmeta"><span class="badge">${by}</span>
+        ${w.anchor ? `<a href="#" class="goto" data-target="${w.anchor}">${esc(w.label)}</a>` : ""}</div>
+    </div>`;
+  }).join("");
+
+  $("panelBody").innerHTML = `<div class="tabs">${tabs}</div>
+    ${list.length ? rows : `<p class="muted">Nothing here.</p>`}
+    ${list.length > panelShown ? `<button class="ghost more">Show more (${list.length - panelShown} left)</button>` : ""}`;
+}
+
+$("panelBody").addEventListener("click", e => {
+  const tab = e.target.closest(".tab");
+  if (tab) { panelTab = tab.dataset.tab; panelShown = PAGE; drawPanel(); $("panelBody").scrollTop = 0; return; }
+  if (e.target.closest(".more")) { panelShown += PAGE; drawPanel(); return; }
+  const go = e.target.closest(".goto");
+  if (go) {
+    e.preventDefault();
+    $("panel").close();
+    document.getElementById(go.dataset.target).scrollIntoView({ block: "start" });
+  }
+});
+$("panelClose").onclick = () => $("panel").close();
+$("panel").addEventListener("click", e => { if (e.target === $("panel")) $("panel").close(); });
+
+async function startAiFix() {
+  $("aiFix").disabled = true;
+  const r = await fetch(`/api/jobs/${jobId}/ai-fix`, { method: "POST" });
+  if (!r.ok) {
+    const j = await r.json().catch(() => ({}));
+    alert("Could not start the AI fix: " + (j.error || r.statusText));
+    $("aiFix").disabled = false;
+    return;
+  }
+  showProgress();
+}
+
+let aiConfig = { ai_available: false };
+fetch("/api/config").then(r => r.json()).then(c => {
+  aiConfig = c;
+  if (c.ai_available) { $("aiOpt").hidden = false; $("aiModel").textContent = c.ai_model; }
+  if (doc) render();
+}).catch(() => {});
+
+// sidebar links scroll without touching the URL hash, which holds the job id
+$("nav").addEventListener("click", e => {
+  const a = e.target.closest("a[data-target]");
+  if (!a) return;
+  e.preventDefault();
+  document.getElementById(a.dataset.target).scrollIntoView({ block: "start" });
+});
+
+// click a rendered formula to compare with the source image and see the LaTeX
+$("content").addEventListener("click", e => {
+  const span = e.target.closest(".math");
+  if (!span) return;
+  const line = span.closest(".ln");
+  const name = span.dataset.eq;
+  const existing = line.nextElementSibling;
+  if (existing && existing.classList.contains("orig") && existing.dataset.eq === name) { existing.remove(); return; }
+  const info = window._eqs[name] || {};
+  const box = document.createElement("div");
+  box.className = "orig"; box.dataset.eq = name;
+  const by = info.source === "ai" ? `AI (${info.model || "?"})` : (info.source || "?");
+  box.innerHTML = `Original image (${esc(name)}, read by ${esc(by)})
+    <img class="eq-img" src="${imgUrl(name)}" alt="">
+    <code>${esc(info.latex || "")}</code>`;
+  line.after(box);
+});
+
+// ---------- list of everything uploaded so far ----------
+async function drawJobList() {
+  let list;
+  try { list = (await (await fetch("/api/jobs")).json()).jobs || []; } catch { return; }
+  if (!list.length) return;
+  const busy = list.filter(j => j.status === "queued" || j.status === "running").length;
+  const done = list.filter(j => j.status === "done" && j.hasResult);
+  const mongo = await mongoConfig();
+  $("jobList").innerHTML = `<h3 style="margin:26px 0 8px;font-size:14px">Uploaded PDFs (${list.length})</h3>
+    ${done.length ? `<div class="bulkbar">
+      <button class="ghost" id="bundleAll" title="Save every finished chapter's questions.json and images together in exports/">📦 Bundle all (${done.length})</button>
+      ${mongo.available ? `<button class="ghost" id="pushAll" title="Bundle every finished chapter and send it to ${esc(mongo.db)}.${esc(mongo.collection)}">⬆ Push all to MongoDB</button>`
+        : `<span class="hint" style="margin:0">Add MONGODB_URI to the .env file and restart the app to push from here</span>`}
+      <span id="bulkState" class="hint" style="margin:0"></span>
+    </div>` : ""}
+    <table class="jobs"><tbody>${list.map(j => {
+      const state = j.status === "done" ? (j.questions != null ? `${j.questions} questions` : "done")
+        : j.status === "error" ? `<span style="color:var(--err)">failed</span>`
+        : j.status === "queued" ? "waiting…"
+        : j.status === "running" ? `${esc(j.stage || "working")}${j.total ? ` ${j.done}/${j.total}` : ""}`
+        : "—";
+      const canDelete = j.status !== "queued" && j.status !== "running";
+      return `<tr><td class="name">${esc(j.filename)}</td><td class="state">${state}</td>
+        <td class="links">${j.hasResult ? `<a href="#job=${j.id}">Results</a> · <a href="/review#job=${j.id}">Review</a> · ` : ""}${
+          canDelete ? `<a class="del" data-del="${j.id}" data-name="${esc(j.filename)}" data-q="${j.questions ?? ""}" title="Delete this PDF and everything extracted from it">Delete</a>` : ""}</td></tr>`;
+    }).join("")}</tbody></table>
+    ${busy ? `<div class="hint">${busy} still processing — they run one at a time.</div>` : ""}`;
+  if ($("bundleAll")) $("bundleAll").onclick = () => bulk(done, false);
+  if ($("pushAll")) $("pushAll").onclick = () => bulk(done, true);
+  $("jobList").querySelectorAll("a[data-del]").forEach(a => a.onclick = () => deleteJob(a.dataset));
+  clearTimeout(window._jobTimer);
+  if (busy && !window._bulkRunning) window._jobTimer = setTimeout(drawJobList, 4000);
+}
+
+async function deleteJob({ del: id, name, q }) {
+  const ok = confirm(`Delete "${name}"?\n\n`
+    + `This removes the uploaded PDF, its extracted images`
+    + (q ? `, its ${q} question(s)` : "") + ` and any review edits.\n`
+    + `Anything already pushed to MongoDB stays there.\n\nThis cannot be undone.`);
+  if (!ok) return;
+  try {
+    const r = await fetch(`/api/jobs/${id}`, { method: "DELETE" });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    if (location.hash === `#job=${id}`) location.hash = "";
+    await drawJobList();
+  } catch (e) { alert("Could not delete: " + e.message); }
+}
+
+let _mongoCfg = null;
+async function mongoConfig() {
+  if (_mongoCfg) return _mongoCfg;
+  try { _mongoCfg = await (await fetch("/api/mongo")).json(); } catch { _mongoCfg = { available: false }; }
+  return _mongoCfg;
+}
+
+// one chapter at a time, so a failure stops at that chapter instead of half-writing everything
+async function bulk(jobs, push) {
+  const cfg = await mongoConfig();
+  if (push) {
+    const ok = confirm(`Send ${jobs.length} chapter(s) to ${cfg.db}.${cfg.collection}?\n\n`
+      + `Questions are added if new and updated if already there, and images go into GridFS.\n`
+      + `This writes to your live database.`);
+    if (!ok) return;
+  }
+  window._bulkRunning = true;
+  clearTimeout(window._jobTimer);
+  const btns = [$("bundleAll"), $("pushAll")].filter(Boolean);
+  btns.forEach(b => b.disabled = true);
+  const state = $("bulkState");
+  let q = 0, imgs = 0, failed = [];
+  for (let i = 0; i < jobs.length; i++) {
+    const j = jobs[i];
+    state.textContent = `${push ? "Pushing" : "Bundling"} ${i + 1}/${jobs.length}: ${j.filename}`;
+    try {
+      const url = push ? `/api/jobs/${j.id}/push` : `/api/jobs/${j.id}/bundle`;
+      const opts = push ? { method: "POST", headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ write: true }) }
+                        : { method: "POST" };
+      const r = await fetch(url, opts);
+      const res = await r.json();
+      if (!r.ok) throw new Error(res.error || r.statusText);
+      q += res.questions || 0;
+      imgs += push ? (res.imagesStored || 0) : (res.images || 0);
+    } catch (e) { failed.push(`${j.filename}: ${e.message}`); }
+  }
+  window._bulkRunning = false;
+  btns.forEach(b => b.disabled = false);
+  state.textContent = `${push ? "Pushed" : "Bundled"} ${jobs.length - failed.length}/${jobs.length}`
+    + ` — ${q} question(s), ${imgs} image(s)` + (failed.length ? ` · ${failed.length} failed` : "");
+  if (failed.length) console.warn("Failed chapters:\n" + failed.join("\n"));
+}
+if (!location.hash) drawJobList();
+
+// resume a job after a page reload
+const m = location.hash.match(/job=([a-f0-9]+)/);
+if (m) { jobId = m[1]; showProgress(); }
+</script>
+</body>
+</html>

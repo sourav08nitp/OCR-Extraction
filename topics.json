@@ -1,0 +1,613 @@
+{
+ "Class 10/Maths/Real Numbers": {
+  "topics": [
+   "Euclid's Division Lemma",
+   "The Fundamental Theorem of Arithmetic",
+   "Revisiting Irrational Numbers"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 10/Maths/Polynomials": {
+  "topics": [
+   "Geometrical Meaning of the Zeroes of a Polynomial",
+   "Relationship between Zeroes and Coefficients of a Polynomial"
+  ],
+  "source": "NCERT Class 10 Maths ch2"
+ },
+ "Class 10/Maths/Pair of Linear Equations in Two Variables": {
+  "topics": [
+   "Graphical Method of Solution of a Pair of Linear Equations",
+   "Algebraic Methods of Solving a Pair of Linear Equations",
+   "Substitution Method",
+   "Elimination Method",
+   "Cross-Multiplication Method",
+   "Equations Reducible to a Pair of Linear Equations in Two Variables"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 10/Maths/Quadratic Equations": {
+  "topics": [
+   "Introduction to Quadratic Equations",
+   "Solution of a Quadratic Equation by Factorisation",
+   "Solution of a Quadratic Equation by Completing the Square",
+   "Nature of Roots",
+   "Quadratic Equations in Daily Life"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 10/Maths/Arithmetic Progression": {
+  "topics": [
+   "Introduction to Arithmetic Progressions",
+   "Arithmetic Progressions",
+   "nth Term of an AP",
+   "Sum of First n Terms of an AP",
+   "Arithmetic Progressions in Daily Life"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 10/Maths/Triangles": {
+  "topics": [
+   "Similar Figures",
+   "Similarity of Triangles",
+   "Criteria for Similarity of Triangles"
+  ],
+  "source": "NCERT Class 10 Maths ch6"
+ },
+ "Class 10/Maths/Coordinate Geometry": {
+  "topics": [
+   "Introduction to Coordinate Geometry",
+   "The Cartesian Plane",
+   "Coordinates of a Point",
+   "Plotting a Point in the Plane if its Coordinates are Given"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 10/Maths/Introduction to Trigonometry": {
+  "topics": [
+   "Trigonometric Ratios",
+   "Trigonometric Ratios of Some Specific Angles",
+   "Trigonometric Ratios of Complementary Angles",
+   "Trigonometric Identities",
+   "Heights and Distances"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 10/Maths/Some Applications of Trigonometry": {
+  "topics": [
+   "Introduction to Trigonometry",
+   "Heights and Distances"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 10/Maths/Circles": {
+  "topics": [
+   "Tangent to a Circle",
+   "Number of Tangents from a Point on a Circle"
+  ],
+  "source": "NCERT Class 10 Maths ch10"
+ },
+ "Class 10/Maths/Constructions": {
+  "topics": [
+   "Constructions of Tangents to a Circle",
+   "Construction of Tangents to a Circle Passing Through a Point Outside the Circle",
+   "Construction of a Triangle Similar to a Given Triangle",
+   "Division of a Line Segment in a Given Ratio",
+   "Construction of Tangent to a Circle from a Point Outside It"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 10/Maths/Area Related to Circles": {
+  "topics": [
+   "Perimeter and Area of a Circle",
+   "Areas of Sector and Segment of a Circle",
+   "Areas of Combinations of Plane Figures"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 10/Maths/Surface Areas and Volumes": {
+  "topics": [
+   "Surface Area of a Combination of Solids",
+   "Volume of a Combination of Solids",
+   "Conversion of Solid from One Shape to Another",
+   "Frustum of a Cone"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 10/Maths/Statistics": {
+  "topics": [
+   "Mean of Grouped Data",
+   "Mode of Grouped Data",
+   "Median of Grouped Data"
+  ],
+  "source": "NCERT Class 10 Maths ch13"
+ },
+ "Class 10/Maths/Probability": {
+  "topics": [
+   "Classical Definition of Probability",
+   "Probability - An Experimental Approach"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 10/Science/Chemical Reactions and Equations": {
+  "topics": [
+   "Writing a Chemical Equation",
+   "Balanced Chemical Equations",
+   "Combination Reaction",
+   "Decomposition Reaction",
+   "Displacement Reaction",
+   "Double Displacement Reaction",
+   "Oxidation and Reduction",
+   "Corrosion",
+   "Rancidity"
+  ],
+  "source": "NCERT Class 10 Science ch1"
+ },
+ "Class 10/Science/Acids, Bases and Salts": {
+  "topics": [
+   "Acids and Bases in the Laboratory",
+   "How do Metal Carbonates and Metal",
+   "Reaction of Metallic Oxides with Acids",
+   "Reaction of a Non-metallic Oxide with Base",
+   "Family of Salts",
+   "Chemicals from Common Salt"
+  ],
+  "source": "NCERT Class 10 Science ch2"
+ },
+ "Class 10/Science/Metals and Non-Metals": {
+  "topics": [
+   "Metals",
+   "Non-metals",
+   "How do Metals react with Solutions of other Metal",
+   "The Reactivity Series",
+   "Properties of Ionic Compounds",
+   "Extraction of Metals",
+   "Enrichment of Ores",
+   "Extracting Metals Low in the Activity Series",
+   "Extracting Metals in the Middle of the Activity Series",
+   "Extracting Metals towards the Top of the",
+   "Refining of Metals",
+   "Prevention of Corrosion"
+  ],
+  "source": "NCERT Class 10 Science ch3"
+ },
+ "Class 10/Science/Carbon and its Compounds": {
+  "topics": [
+   "VERSATILE NATURE OF CARBON",
+   "CHEMICAL PROPERTIES OF CARBON COMPOUNDS",
+   "SOAPS AND DETERGENTS"
+  ],
+  "source": "NCERT Class 10 Science ch4"
+ },
+ "Class 10/Science/Periodic Classification of Elements": {
+  "topics": [
+   "Döbereiner’s Triads",
+   "Newlands’ Law of Octaves",
+   "Mendeleev’s Periodic Table",
+   "The Modern Periodic Table",
+   "Trends in the Modern Periodic Table"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 10/Science/Life Processes": {
+  "topics": [
+   "What are life processes?",
+   "Nutrition",
+   "Respiration",
+   "Transportation",
+   "Excretion"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 10/Science/Control and Coordination": {
+  "topics": [
+   "Human Brain",
+   "Immediate Response to Stimulus",
+   "Movement Due to Growth"
+  ],
+  "source": "NCERT Class 10 Science ch6"
+ },
+ "Class 10/Science/How Do Organisms Reproduce": {
+  "topics": [
+   "The Importance of Variation",
+   "Fission",
+   "Fragmentation",
+   "Regeneration",
+   "Budding",
+   "Vegetative Propagation",
+   "Spore Formation",
+   "Sexual Reproduction in Flowering Plants",
+   "Reproduction in Human Beings"
+  ],
+  "source": "NCERT Class 10 Science ch7"
+ },
+ "Class 10/Science/Heredity and Evolution": {
+  "topics": [
+   "Inherited Traits",
+   "Sex Determination"
+  ],
+  "source": "NCERT Class 10 Science ch8"
+ },
+ "Class 10/Science/Light - Reflection and Refraction": {
+  "topics": [
+   "Reflection of Light",
+   "Spherical Mirrors",
+   "Mirror Formula and Magnification",
+   "Refraction of Light",
+   "Refraction by Spherical Lenses",
+   "Lens Formula and Magnification",
+   "Power of a Lens"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 10/Science/Human Eye and Colourful World": {
+  "topics": [
+   "THE HUMAN EYE",
+   "ATMOSPHERIC REFRACTION",
+   "SCATTERING OF LIGHT"
+  ],
+  "source": "NCERT Class 10 Science ch10"
+ },
+ "Class 10/Science/Electricity": {
+  "topics": [
+   "Resistors in Series",
+   "Resistors in Parallel",
+   "Practical Applications of Heating Effect of"
+  ],
+  "source": "NCERT Class 10 Science ch11"
+ },
+ "Class 10/Science/Magnetic Effect of Electric Current": {
+  "topics": [
+   "Magnetic Field due to a Current through a Straight",
+   "Right-Hand Thumb Rule",
+   "Magnetic Field due to a Current through a",
+   "Magnetic Field due to a Current in a Solenoid"
+  ],
+  "source": "NCERT Class 10 Science ch12"
+ },
+ "Class 10/Science/Sources of Energy": {
+  "topics": [
+   "Energy Sources",
+   "Conventional Sources of Energy",
+   "Thermal Power Plant",
+   "Hydro Power Plants",
+   "Non-Conventional Sources of Energy",
+   "Solar Energy",
+   "Solar Cell",
+   "Energy from the Sea",
+   "Geothermal Energy",
+   "Biomass"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 10/Science/Our Environment": {
+  "topics": [
+   "Food Chains and Webs",
+   "Ozone Layer and How it is Getting Depleted",
+   "Managing the Garbage we Produce"
+  ],
+  "source": "NCERT Class 10 Science ch13"
+ },
+ "Class 10/Science/Management of Natural Resources": {
+  "topics": [
+   "Natural Resources",
+   "The Quality of the Air, Water and Soil",
+   "Forest and Wildlife",
+   "Water for All",
+   "Dams: A Blessing or Bane?",
+   "Local Participation in Managing Resources",
+   "Chipko Andolan"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Maths/Number Systems": {
+  "topics": [
+   "Irrational Numbers",
+   "Real Numbers and Their Decimal Expansions",
+   "Representing Real Numbers on the Number Line",
+   "Operations on Real Numbers",
+   "Laws of Exponents for Real Numbers"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Maths/Polynomials": {
+  "topics": [
+   "Zeros of a Polynomial",
+   "Remainder Theorem",
+   "Factor Theorem",
+   "Algebraic Identities",
+   "Division Algorithm for Polynomials"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Maths/Coordinate Geometry": {
+  "topics": [
+   "Introduction to Coordinate Geometry",
+   "The Cartesian System",
+   "Plotting a Point in the Plane if its Coordinates are Given"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Maths/Linear Equations in Two Variables": {
+  "topics": [
+   "Linear Equations",
+   "Graph of a Linear Equation in Two Variables",
+   "Equations of Lines Parallel to x-axis"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Maths/Introduction to Euclid's Geometry": {
+  "topics": [
+   "Introduction to Euclid’s Geometry",
+   "Euclid’s Definitions, Axioms and Postulates",
+   "Equivalent Versions of Euclid’s Fifth Postulate"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Maths/Lines and Angles": {
+  "topics": [
+   "Basic Terms and Definitions",
+   "Pairs of Lines",
+   "Lines Parallel to the Same Line",
+   "Transversal",
+   "Angle Sum Property of a Triangle"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Maths/Triangles": {
+  "topics": [
+   "Similar Figures",
+   "Similarity of Triangles",
+   "Criteria for Similarity of Triangles",
+   "Areas of Similar Triangles",
+   "Pythagoras Theorem"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Maths/Quadrilaterals": {
+  "topics": [
+   "Angle Sum Property of a Quadrilateral",
+   "Types of Quadrilaterals",
+   "Properties of a Parallelogram",
+   "Conditions for a Quadrilateral to be a Parallelogram",
+   "The Mid-point Theorem"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Maths/Areas of Parallelograms and Triangles": {
+  "topics": [
+   "Parallelograms on the Same Base and Between the Same Parallels",
+   "Triangles on the Same Base and Between the Same Parallels",
+   "Area of a Parallelogram",
+   "A Triangle and a Parallelogram on the Same Base and Between the Same Parallels"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Maths/Circles": {
+  "topics": [
+   "Equal Chords and Their Distances from the Centre",
+   "Angle Subtended by a Chord at a Point",
+   "Circles Through Three Points",
+   "Cyclic Quadrilaterals"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Maths/Constructions": {
+  "topics": [
+   "Introduction to Constructions",
+   "Construction of bisectors",
+   "Construction of a triangle given its base, base angle(s) and the sum of the other two sides / the other two sides",
+   "Construction of triangles similar to a given triangle",
+   "Construction of tangents to a circle"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Maths/Heron's Formula": {
+  "topics": [
+   "Area of a Triangle by Heron's Formula",
+   "Applications of Heron's Formula"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Maths/Surface Areas and Volumes": {
+  "topics": [
+   "Surface Area of a Cuboid and a Cube",
+   "Surface Area of a Right Circular Cylinder",
+   "Surface Area of a Right Circular Cone",
+   "Surface Area of a Sphere",
+   "Volumes of a Cuboid, a Cube, and a Cylinder",
+   "Volumes of a Cone and a Sphere"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Maths/Statistics": {
+  "topics": [
+   "Collection and Presentation of Data",
+   "Bar Graphs",
+   "Histogram",
+   "Frequency Polygon",
+   "General Remarks on Graphical Representation of Data"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Maths/Probability": {
+  "topics": [
+   "Introduction to Probability",
+   "Experimental Probability",
+   "Outcomes of Experiments",
+   "Equally Likely Outcomes",
+   "Getting an Estimate of Probability",
+   "Probability of an Event"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Science/Matter in Our Surroundings": {
+  "topics": [
+   "Physical Nature of Matter",
+   "Characteristics of Particles of Matter",
+   "States of Matter",
+   "Can Matter Change Its State",
+   "Evaporation"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Science/Is Matter Around Us Pure": {
+  "topics": [
+   "What is a mixture?",
+   "Types of mixtures",
+   "What is a solution?",
+   "What is a suspension?",
+   "What is a colloid?",
+   "Separating the components of a mixture",
+   "Physical and chemical changes",
+   "What are the types of pure substances?"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Science/Atoms and Molecules": {
+  "topics": [
+   "Laws of Chemical Combination",
+   "Atoms",
+   "What is a Molecule?",
+   "Symbols of Atoms",
+   "Atomic Mass",
+   "Molecules and Molecular Mass",
+   "Law of Constant Proportions"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Science/Structure of Atom": {
+  "topics": [
+   "Charged Particles in Matter",
+   "The Structure of an Atom",
+   "How are Electrons Distributed in Different Orbits (Shells)?",
+   "Valency",
+   "Atomic Number and Mass Number",
+   "Isotopes",
+   "Isobars"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Science/The Fundamental Unit of Life": {
+  "topics": [
+   "What are Living Organisms Made Up of?",
+   "What is a Cell?",
+   "The Cell Membrane",
+   "The Nucleus",
+   "Cytoplasm",
+   "Cell Organelles",
+   "Cell Division"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Science/Tissues": {
+  "topics": [
+   "Tissues for Growth in Plants conservation practices,",
+   "Jar A",
+   "Jar B",
+   "Animal Tissues",
+   "The Musculoskeletal System",
+   "Types of Joints",
+   "Skeletal System"
+  ],
+  "source": "NCERT Class 9 Science ch3"
+ },
+ "Class 9/Science/Diversity in Living Organisms": {
+  "topics": [
+   "What is living?",
+   "The hierarchy of classification - groups",
+   "Monera",
+   "Protista",
+   "Fungi",
+   "Plantae",
+   "Animalia"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Science/Motion": {
+  "topics": [
+   "Distance and Displacement",
+   "Uniform and Non-uniform Motion",
+   "Acceleration",
+   "Graphical Representation of Motion",
+   "Equations of Motion by Graphical Method",
+   "Uniform Circular Motion"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Science/Force and Laws of Motion": {
+  "topics": [
+   "Force and Motion",
+   "Newton's Laws of Motion",
+   "Inertia and Mass",
+   "Force",
+   "Momentum",
+   "Laws of Motion",
+   "Action and Reaction Forces",
+   "Conservation of Momentum"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Science/Gravitation": {
+  "topics": [
+   "Universal Law of Gravitation",
+   "Free Fall",
+   "Mass",
+   "Weight",
+   "Thrust and Pressure",
+   "Buoyancy",
+   "Archimedes' Principle"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Science/Work and Energy": {
+  "topics": [
+   "The Work-Energy Theorem",
+   "Forms of Energy",
+   "Mechanical Energy",
+   "Power",
+   "Simple Machines"
+  ],
+  "source": "NCERT Class 9 Science ch7"
+ },
+ "Class 9/Science/Sound": {
+  "topics": [
+   "Production of Sound",
+   "Propagation of Sound",
+   "Reflection of Sound",
+   "Speed of Sound in Different Media",
+   "Reflection of Sound",
+   "Range of Hearing",
+   "Applications of Ultrasound",
+   "Structure of the Human Ear"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Science/Why Do We Fall Ill": {
+  "topics": [
+   "Health and its Failure",
+   "Disease and Its Causes",
+   "Infectious and Non-infectious Causes",
+   "Principles of Treatment",
+   "Principles of Prevention"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Science/Natural Resources": {
+  "topics": [
+   "Our Environment",
+   "Biogeochemical Cycles",
+   "Ozone Layer",
+   "How Are Human Activities Affecting the Environment?"
+  ],
+  "source": "AI suggested - please check"
+ },
+ "Class 9/Science/Improvement in Food Resources": {
+  "topics": [
+   "Crop variety improvement",
+   "Crop production management",
+   "Crop protection management",
+   "Animal husbandry"
+  ],
+  "source": "AI suggested - please check"
+ }
+}

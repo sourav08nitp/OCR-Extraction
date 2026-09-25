@@ -1,0 +1,42 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body { width: 340px; margin: 0; font: 13px/1.45 system-ui, "Segoe UI", sans-serif; color: #1d1d1b; background: #f6f5f1; }
+  header { padding: 12px 14px; background: #2f5d50; color: #fff; font-weight: 700; font-size: 14px; }
+  main { padding: 12px 14px; }
+  label { display: flex; gap: 8px; align-items: center; margin: 4px 0; }
+  .row { display: flex; gap: 6px; margin: 12px 0 8px; flex-wrap: wrap; }
+  button { font: 600 12px system-ui, sans-serif; padding: 7px 12px; border-radius: 7px; border: 0; background: #2f5d50; color: #fff; cursor: pointer; }
+  button.ghost { background: #fff; color: #2f5d50; border: 1px solid #d6d3ca; }
+  #status { background: #fff; border: 1px solid #e3e1da; border-radius: 8px; padding: 8px 10px; min-height: 36px; }
+  #bar { height: 6px; background: #e3e1da; border-radius: 9px; margin-top: 8px; overflow: hidden; }
+  #bar div { height: 100%; width: 0; background: #2f5d50; transition: width .3s; }
+  .muted { color: #6b6a64; font-size: 12px; margin-top: 10px; }
+  code { background: #eceae3; padding: 1px 4px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<header>Selfstudys Chapter Downloader</header>
+<main>
+  <div><b>Books</b></div>
+  <label><input type="checkbox" value="10-maths" checked> Class 10 · Mathematics</label>
+  <label><input type="checkbox" value="10-science" checked> Class 10 · Science</label>
+  <label><input type="checkbox" value="9-maths" checked> Class 9 · Mathematics</label>
+  <label><input type="checkbox" value="9-science" checked> Class 9 · Science</label>
+  <div class="row">
+    <button id="start">Start</button>
+    <button class="ghost" id="pause">Pause</button>
+    <button class="ghost" id="resume">Resume</button>
+    <button class="ghost" id="reset" title="Forget which chapters were downloaded">Reset</button>
+  </div>
+  <div id="status">Ready.</div>
+  <div id="bar"><div></div></div>
+  <div class="muted" id="count"></div>
+  <div class="muted">Files go to your Downloads folder under <code>selfstudys/Class N/Subject/</code>.
+    Log in on selfstudys.com first. If the site asks something (login, class, verification), answer it in the tab and the downloader carries on.</div>
+</main>
+<script src="popup.js"></script>
+</body>
+</html>
