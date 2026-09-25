@@ -99,6 +99,10 @@
   .imgwrap .rm { position: absolute; top: -6px; right: -6px; width: 22px; height: 22px; padding: 0; border-radius: 50%;
                  font-size: 11px; line-height: 22px; background: var(--err); color: #fff; opacity: .85; }
   .imgwrap .rm:hover { opacity: 1; }
+  .source-ref { display: inline-flex; vertical-align: middle; align-items: center; gap: 5px; margin: 3px 5px;
+                padding: 3px 6px; border: 1px solid var(--accent); background: var(--accent-soft); color: var(--ink); }
+  .source-ref img { width: auto; height: auto; max-width: 90px; max-height: 72px; zoom: 1; background: #fff; }
+  .source-ref span { font: 11px/1.3 system-ui, sans-serif; white-space: nowrap; }
   .toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--ink); color: var(--panel);
            padding: 8px 16px; border-radius: 8px; font-size: 13px; display: none; z-index: 5; }
   .empty { color: var(--muted); padding: 30px 0; text-align: center; }
@@ -163,10 +167,17 @@ function toast(msg) { const t = $("toast"); t.textContent = msg; t.style.display
 const imgSrc = ref => ref.startsWith("img:") ? `/api/jobs/${jobId}/images/${encodeURIComponent(ref.slice(4))}` : ref;
 
 // part: "stem" | "sol" -> images get a remove button
-function renderRich(text, part) {
+function renderRich(text, part, sources = []) {
   if (!text) return `<span style="color:var(--muted)">—</span>`;
   // maths is \(...\) inline and \[...\] display; $...$ is still rendered so older jobs keep working
-  return text.split(/(!\[\]\([^)]+\)|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\]|\$[^$]+\$)/g).map(p => {
+  return text.split(/(!\[\]\([^)]+\)|\[\[src:[^\]]+\]\]|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\]|\$[^$]+\$)/g).map(p => {
+    const source = p.match(/^\[\[src:([^\]]+)\]\]$/);
+    if (source) {
+      const item = sources.find(s => s.name === source[1] && s.part === (part === "stem" ? "question" : "solution"));
+      if (!item) return "";
+      return `<button class="source-ref" data-act="source" data-name="${esc(item.name)}" title="Show original image on PDF page ${esc(item.page || '?')}">
+        <img src="${esc(imgSrc('img:' + item.name))}" alt="Original ${esc(item.name)}"><span>Original<br>p. ${esc(item.page || '?')}</span></button>`;
+    }
     const math = p.match(/^\\\(([\s\S]+)\\\)$|^\\\[([\s\S]+)\\\]$|^\$([\s\S]+)\$$/);
     if (math) {
       const tex = math[1] ?? math[2] ?? math[3];
@@ -187,6 +198,24 @@ function renderRich(text, part) {
 const stemOf = q => q.manual.stemOverride ?? q.auto.stem;
 const solOf = q => q.manual.solutionOverride ?? q.auto.solutionText;
 const edited = q => q.manual.stemOverride != null || q.manual.solutionOverride != null;
+function displayText(q, part) {
+  const manual = part === "stem" ? q.manual.stemOverride : q.manual.solutionOverride;
+  const automatic = part === "stem" ? q.auto.reviewStem : q.auto.reviewSolution;
+  if (manual == null) return automatic ?? (part === "stem" ? q.auto.stem : q.auto.solutionText);
+  let text = manual;
+  const seen = new Map();
+  for (const source of q.auto.sourceImages || []) {
+    if (source.part !== (part === "stem" ? "question" : "solution")) continue;
+    const formula = `\\(${source.latex}\\)`, from = seen.get(formula) || 0;
+    const at = text.indexOf(formula, from);
+    if (at < 0) continue;
+    const end = at + formula.length;
+    const marker = `[[src:${source.name}]]`;
+    if (!text.startsWith(marker, end)) text = text.slice(0, end) + marker + text.slice(end);
+    seen.set(formula, end + marker.length);
+  }
+  return text;
+}
 let editKey = null, aiBusy = null, tagBusy = null;
 
 // effective value: question override, else document default, else automatic
@@ -588,9 +617,9 @@ function questionBody(q) {
       <h4 style="margin-top:10px">${esc(ansLabel)}</h4><textarea class="edit ed-sol" rows="9">${esc(solOf(q))}</textarea>
       <div class="hint" style="margin:4px 0 0">Maths goes between <code>\\(</code> and <code>\\)</code>, a whole line of maths between <code>\\[</code> and <code>\\]</code>. Images are the <code>![](img:…)</code> lines — delete a line to remove that image.</div>
       <div class="tools"><button data-act="save-edit">Save text</button><button class="ghost" data-act="cancel-edit">Cancel</button></div>` : `
-      <div class="rich">${renderRich(stemOf(q), "stem")}</div>
+      <div class="rich">${renderRich(displayText(q, "stem"), "stem", a.sourceImages)}</div>
       <h4 style="margin-top:10px">${esc(ansLabel)}</h4>
-      <div class="rich">${renderRich(solOf(q), "sol")}</div>
+      <div class="rich">${renderRich(displayText(q, "sol"), "sol", a.sourceImages)}</div>
       <div class="tools">
         <button class="ghost" data-act="edit">✎ Edit text</button>
         <button class="ghost" data-act="crop-stem" title="Drag a box on the PDF to add that part of the page as an image in the question">✂ Crop → question</button>
@@ -677,7 +706,12 @@ async function questionAction(btn) {
   const q = data.questions.find(x => x.key === key);
   if (!q) return;
   const a = btn.dataset.act;
-  if (a === "rm") {
+  if (a === "source") {
+    const source = (q.auto.sourceImages || []).find(s => s.name === btn.dataset.name);
+    if (source?.page && source.bbox) showPage(source.page, [source]);
+    else toast("The original crop is saved, but its PDF position is unavailable");
+    return;
+  } else if (a === "rm") {
     // remove one image from the question or solution; the text becomes "edited"
     const field = btn.dataset.part === "stem" ? "stemOverride" : "solutionOverride";
     const text = btn.dataset.part === "stem" ? stemOf(q) : solOf(q);

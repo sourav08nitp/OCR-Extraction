@@ -192,6 +192,24 @@ def _as_text(sec, image_url):
     return re.sub(r"\[\[eq:([^\]]+)\]\]", lambda m: f"![]({image_url(m.group(1))})", text).strip()
 
 
+def _review_text(sec, image_url):
+    """Show an AI formula with its source crop at the original placeholder position, for Review only."""
+    readings = sec.get("equations_latex", {})
+
+    def replace(match):
+        name = match.group(1)
+        reading = readings.get(name) or {}
+        latex = reading.get("latex")
+        if latex is not None and not reading.get("needs_review"):
+            if not latex:
+                return ""
+            formula = rf"\({latex}\)"
+            return formula + f"[[src:{name}]]" if reading.get("source") == "ai" else formula
+        return f"![]({image_url(name)})"
+
+    return re.sub(r"\[\[eq:([^\]]+)\]\]", replace, sec.get("text", "")).strip()
+
+
 def _norm_bbox(bbox, size):
     w, h = size
     x0, y0, x1, y1 = bbox
@@ -243,6 +261,18 @@ def auto_fields(doc, ex, q, image_url):
     pyq = RE_PYQ.search(q["question"].get("text", ""))
     region = q["regions"][0] if q.get("regions") else None
     crops = []
+    source_images = []
+    for part in ("question", "solution"):
+        sec = q[part]
+        for name in dict.fromkeys(sec.get("equations", [])):
+            reading = sec.get("equations_latex", {}).get(name) or {}
+            if reading.get("source") != "ai" or not reading.get("latex") or reading.get("needs_review"):
+                continue
+            box = boxes.get(name)
+            page = box.get("page") if box else None
+            source_images.append({"name": name, "part": part, "latex": reading["latex"],
+                                  "page": page,
+                                  "bbox": _norm_bbox(box["bbox"], sizes[page]) if page in sizes else None})
     for name in stem_imgs + sol_imgs:
         b = boxes.get(name)
         if b and b["page"] in sizes:
@@ -271,6 +301,9 @@ def auto_fields(doc, ex, q, image_url):
         "chapter": doc.get("chapter"),
         "stem": stem,
         "solutionText": sol,
+        "reviewStem": _review_text(q["question"], image_url),
+        "reviewSolution": _review_text(q["solution"], image_url),
+        "sourceImages": source_images,
         "solutionHeading": q.get("solution_heading"),
         "images": [image_url(n) for n in stem_imgs],
         "explanationImages": [image_url(n) for n in sol_imgs],
