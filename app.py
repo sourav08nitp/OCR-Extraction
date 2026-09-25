@@ -37,6 +37,7 @@ app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
 jobs = {}              # job_id -> status dict
 work = queue.Queue()   # one worker: pix2tex is heavy and the model is shared
 _model = None
+_image_edit_lock = threading.Lock()
 
 
 def _get_model(job):
@@ -524,6 +525,80 @@ def job_images_zip(job_id):
             z.write(JOBS_DIR / job_id / "out" / "images" / f, f"images/{f}")
     buf.seek(0)
     return send_file(buf, mimetype="application/zip", as_attachment=True, download_name=f"images_{job_id}.zip")
+
+
+@app.post("/api/jobs/<job_id>/images/<name>/action")
+def job_image_action(job_id, name):
+    """Re-read, keep, or remove one extracted image everywhere it occurs in a job."""
+    job = _job_or_404(job_id)
+    if job["status"] != "done":
+        abort(409)
+    if Path(name).name != name or not name.lower().endswith(".png"):
+        return jsonify(error="invalid image name"), 400
+    action = (request.get_json(silent=True) or {}).get("action")
+    if action not in ("ai", "skip", "remove"):
+        return jsonify(error="action must be ai, skip, or remove"), 400
+    if action == "ai" and not ai_fallback.available():
+        return jsonify(error="OPENAI_API_KEY is not set on the server"), 400
+
+    job_dir = JOBS_DIR / job_id
+    out = job_dir / "out"
+    path = out / "structured.json"
+    doc = json.loads(path.read_text(encoding="utf-8"))
+    sections = pdf_to_structured.image_sections(doc, name)
+    if not sections:
+        abort(404)
+
+    result = None
+    if action == "ai":
+        image = out / "images" / name
+        if not image.is_file():
+            return jsonify(error="the image file is missing"), 404
+        token = f"[[eq:{name}]]"
+        context = next((line.replace(token, "[image]") for sec in sections
+                        for line in sec["text"].splitlines() if token in line), "")
+        try:
+            answer = ai_fallback.transcribe([(image, context)])[image]
+        except Exception as e:
+            return jsonify(error=f"AI re-read failed: {e}"[:300]), 502
+        if answer.get("kind") == "figure":
+            result = pdf_to_structured.figure_entry(f"AI ({ai_fallback.model_name()}) identified a figure", by="ai")
+        elif answer.get("latex"):
+            result = {"latex": answer["latex"], "source": "ai", "model": ai_fallback.model_name(),
+                      "confidence": None, "needs_review": False}
+        else:
+            return jsonify(error=answer.get("error") or "AI could not read this image; it was left unchanged"), 422
+
+    with _image_edit_lock:
+        if job["status"] != "done":
+            abort(409)
+        doc = json.loads(path.read_text(encoding="utf-8"))
+        if not pdf_to_structured.image_sections(doc, name):
+            abort(404)
+        if action == "ai":
+            count = pdf_to_structured.set_image_result(doc, name, result)
+        elif action == "skip":
+            count = pdf_to_structured.set_image_result(doc, name, {
+                "latex": None, "source": "skipped", "kind": "image", "confidence": None,
+                "needs_review": False, "reason": "kept as an image by user"})
+        else:
+            count = pdf_to_structured.remove_image(doc, name)
+        if action in ("ai", "remove"):
+            saved = review.load_review(job_dir)
+            token = f"![](img:{name})"
+            replacement = (rf"\({result['latex']}\)" if action == "ai" and result.get("latex")
+                           else "" if action == "remove" else token)
+            changed = False
+            for manual in saved["questions"].values():
+                for field in ("stemOverride", "solutionOverride"):
+                    value = manual.get(field)
+                    if isinstance(value, str) and token in value and replacement != token:
+                        manual[field] = value.replace(token, replacement).strip()
+                        changed = True
+            if changed:
+                review.save_review(job_dir, saved)
+        pdf_to_structured.save(doc, out)
+    return jsonify(ok=True, action=action, occurrences=count, result=result)
 
 
 @app.get("/api/jobs/<job_id>/images/<name>")

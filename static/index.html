@@ -95,6 +95,10 @@
   .pres code.old { opacity: .7; }
   .pmeta { display: flex; flex-direction: column; gap: 6px; align-items: flex-start; font-size: 12px; }
   .pmeta a { color: var(--accent); }
+  .pactions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .pactions button { padding: 5px 9px; font-size: 12px; }
+  .pactions .danger { color: var(--err); border-color: var(--err); }
+  .jumped { outline: 3px solid var(--accent); outline-offset: 4px; border-radius: 3px; }
   .badge { font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: var(--accent-soft); color: var(--accent); }
   .badge.warn { background: var(--warn-soft); color: var(--warn); }
   .muted { color: var(--muted); }
@@ -195,7 +199,8 @@
 <dialog id="panel" class="ui">
   <div class="panel-head">
     <strong>Formulas</strong>
-    <span class="muted small">Original image &rarr; what it became, and who read it</span>
+    <span class="muted small">Click an image or its question link to jump to it</span>
+    <span class="muted small" id="panelStatus" role="status"></span>
     <button class="ghost" id="panelClose" aria-label="Close">Close</button>
   </div>
   <div id="panelBody"></div>
@@ -351,9 +356,10 @@ function renderSection(sec) {
           return `<span class="math" data-eq="${esc(name)}" title="Click to compare with the original image">${out}</span>`;
         } catch { /* fall through to the image */ }
       }
-      if (eqs) reviewCount++;
+      const needsCheck = !!info && (info.needs_review || !!info.latex);
+      if (needsCheck) reviewCount++;
       const img = `<img class="eq-img" src="${imgUrl(name)}" alt="formula ${esc(name)}">`;
-      return eqs ? `<span class="review" title="Needs review: kept as the original image">${img}<small>check</small></span>` : img;
+      return `<span class="${needsCheck ? "review" : "kept-image"}" data-eq="${esc(name)}" title="${needsCheck ? "Needs review" : "Kept as original image"}">${img}${needsCheck ? "<small>check</small>" : ""}</span>`;
     }).join("");
     return `<div class="ln">${html}</div>`;
   }).join("");
@@ -364,15 +370,16 @@ function render() {
   const all = {};
   const where = {};  // formula name -> where it first appears
   doc.exercises.forEach((ex, ei) => ex.questions.forEach((q, qi) => ["question", "solution"].forEach(k => {
-    Object.assign(all, q[k].equations_latex || {});
-    for (const n of Object.keys(q[k].equations_latex || {})) {
+    for (const n of q[k].equations || []) {
+      all[n] = q[k].equations_latex?.[n] || { latex: null, source: "image", needs_review: false };
       if (!where[n]) where[n] = { anchor: `q${ei}_${qi}`, label: `${ex.title} · Q${q.number} · ${k}` };
     }
   })));
   window._where = where;
   const vals = Object.values(all);
   const nQ = doc.exercises.reduce((a, e) => a + e.questions.length, 0);
-  const hasLatex = vals.length > 0;
+  const hasImages = vals.length > 0;
+  const latexCount = vals.filter(v => !!v.latex && !v.needs_review).length;
   const glyph = vals.filter(v => v.source === "glyph" && !v.needs_review).length;
   const review = vals.filter(v => v.needs_review).length;
   const byAi = vals.filter(v => v.source === "ai" && !v.needs_review).length;
@@ -399,13 +406,13 @@ function render() {
   $("stats").innerHTML = `
     <span class="chip"><b>${doc.exercises.length}</b> exercises</span>
     <span class="chip"><b>${nQ}</b> questions</span>
-    ${hasLatex ? `
+    ${hasImages ? `
       <button class="chip link" data-tab="all"><b>${vals.length}</b> images</button>
-      <button class="chip link" data-tab="latex"><b>${vals.length - review - figures}</b> as LaTeX</button>
+      <button class="chip link" data-tab="latex"><b>${latexCount}</b> as LaTeX</button>
       ${figures ? `<button class="chip link" data-tab="figure"><b>${figures}</b> figures</button>` : ""}
       ${byAi ? `<button class="chip link" data-tab="ai"><b>${byAi}</b> by AI</button>` : ""}
       <button class="chip link warn" data-tab="review"><b>${review}</b> to check</button>
-      ${review && aiConfig.ai_available ? `<button class="ghost" id="aiFix">Fix ${review} with AI</button>` : ""}` : `<span class="chip">LaTeX conversion off</span>`}
+      ${review && aiConfig.ai_available ? `<button class="ghost" id="aiFix">Fix ${review} with AI</button>` : ""}` : `<span class="chip">No extracted images</span>`}
     <span class="spacer"></span>
     <a class="chip" href="/review#job=${jobId}" style="background:var(--accent);color:var(--panel);border-color:var(--accent)">Review &amp; export &rarr;</a>
     <a class="chip" href="/api/jobs/${jobId}/result" download="structured.json">Raw JSON</a>
@@ -421,19 +428,21 @@ function render() {
 // ---------- formula panel: every formula with its image, result and origin ----------
 const PANEL_TABS = [
   ["all", "All", v => true],
-  ["latex", "As LaTeX", v => !v.needs_review && v.source !== "figure"],
+  ["latex", "As LaTeX", v => !!v.latex && !v.needs_review],
   ["figure", "Figures (kept as images)", v => v.source === "figure"],
   ["ai", "By AI", v => v.source === "ai" && !v.needs_review],
   ["pix2tex", "By pix2tex", v => v.source === "pix2tex" && !v.needs_review],
   ["glyph", "By symbol matcher", v => v.source === "glyph" && !v.needs_review],
   ["review", "To check", v => v.needs_review],
 ];
-const SOURCE_LABEL = { glyph: "symbol matcher", pix2tex: "pix2tex (local model)", ai: "AI", figure: "figure" };
+const SOURCE_LABEL = { glyph: "symbol matcher", pix2tex: "pix2tex (local model)", ai: "AI", figure: "figure",
+                       skipped: "kept by you", image: "original image" };
 const PAGE = 60;
 let panelTab = "all", panelShown = PAGE;
 
 function openPanel(tab) {
   panelTab = tab; panelShown = PAGE;
+  $("panelStatus").textContent = "";
   drawPanel();
   $("panel").showModal();
 }
@@ -458,9 +467,9 @@ function drawPanel() {
     const w = window._where[name] || {};
     const by = v.source === "ai" ? `AI (${esc(v.model || "?")})` : esc(SOURCE_LABEL[v.source] || v.source || "?");
     let result, notes = "";
-    if (v.source === "figure") {
+    if (v.source === "figure" || v.source === "skipped" || v.source === "image") {
       result = `<span class="badge">kept as image</span>`;
-      notes += `<div class="muted small">Why: ${esc(v.reason || "figure")}</div>`;
+      notes += `<div class="muted small">${esc(v.reason || (v.source === "figure" ? "figure" : "original image"))}</div>`;
     } else if (v.needs_review) {
       result = `<span class="badge warn">kept as image</span>`;
       const why = v.ai_error ? `AI: ${v.ai_error}` : v.katex_error ? `LaTeX did not render: ${v.katex_error}` :
@@ -473,12 +482,17 @@ function drawPanel() {
     }
     if (v.source === "ai" && v.raw) notes += `<div class="muted small">Local model's reading (not trusted, so AI was asked):</div><code class="old">${esc(v.raw)}</code>`;
     if (v.confidence != null) notes += `<div class="muted small">Match confidence ${v.confidence}</div>`;
+    const jump = w.anchor ? `href="#" class="goto" data-target="${w.anchor}" data-name="${esc(name)}"` : "";
     return `<div class="prow">
-      <div class="pimg"><img class="eq-img" loading="lazy" src="${imgUrl(name)}" alt="${esc(name)}"><div class="muted small">${esc(name)}</div></div>
+      <div class="pimg"><a ${jump}><img class="eq-img" loading="lazy" src="${imgUrl(name)}" alt="Jump to ${esc(name)} in the question"></a><div class="muted small">${esc(name)}</div></div>
       <div class="parrow">&rarr;</div>
-      <div class="pres">${result}${notes}</div>
+      <div class="pres">${result}${notes}<div class="pactions">
+        ${aiConfig.ai_available ? `<button class="ghost" data-image-action="ai" data-name="${esc(name)}">Fix with AI</button>` : ""}
+        <button class="ghost" data-image-action="skip" data-name="${esc(name)}" ${v.source === "skipped" ? "disabled" : ""}>Skip / keep image</button>
+        <button class="ghost danger" data-image-action="remove" data-name="${esc(name)}">Remove image</button>
+      </div></div>
       <div class="pmeta"><span class="badge">${by}</span>
-        ${w.anchor ? `<a href="#" class="goto" data-target="${w.anchor}">${esc(w.label)}</a>` : ""}</div>
+        ${w.anchor ? `<a ${jump}>${esc(w.label)}</a>` : ""}</div>
     </div>`;
   }).join("");
 
@@ -495,11 +509,44 @@ $("panelBody").addEventListener("click", e => {
   if (go) {
     e.preventDefault();
     $("panel").close();
-    document.getElementById(go.dataset.target).scrollIntoView({ block: "start" });
+    const question = document.getElementById(go.dataset.target);
+    const image = [...question.querySelectorAll("[data-eq]")].find(el => el.dataset.eq === go.dataset.name);
+    const target = image || question;
+    target.scrollIntoView({ block: "center" });
+    target.classList.add("jumped");
+    setTimeout(() => target.classList.remove("jumped"), 2400);
+    return;
   }
+  const action = e.target.closest("[data-image-action]");
+  if (action) performImageAction(action);
 });
 $("panelClose").onclick = () => $("panel").close();
 $("panel").addEventListener("click", e => { if (e.target === $("panel")) $("panel").close(); });
+
+async function performImageAction(button) {
+  const name = button.dataset.name, action = button.dataset.imageAction;
+  if (action === "remove" && !confirm(`Remove ${name} from this job's result and export? The original PNG stays on disk.`)) return;
+  const status = $("panelStatus"), oldScroll = $("panelBody").scrollTop;
+  $("panelBody").querySelectorAll("[data-image-action]").forEach(b => b.disabled = true);
+  status.textContent = action === "ai" ? `AI reading ${name}…` : `Updating ${name}…`;
+  try {
+    const r = await fetch(`/api/jobs/${jobId}/images/${encodeURIComponent(name)}/action`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ action }) });
+    const answer = await r.json();
+    if (!r.ok) throw new Error(answer.error || r.statusText);
+    const updated = await fetch(`/api/jobs/${jobId}/result`, { cache: "no-store" });
+    if (!updated.ok) throw new Error("could not refresh the result");
+    doc = await updated.json();
+    render();
+    drawPanel();
+    $("panelBody").scrollTop = oldScroll;
+    status.textContent = action === "ai" ? (answer.result?.source === "figure" ? "AI kept it as a figure" : "AI reading applied") :
+                         action === "skip" ? "Kept as image; review flag cleared" : "Image removed from result and export";
+  } catch (err) {
+    status.textContent = `Could not update ${name}: ${err.message}`;
+    $("panelBody").querySelectorAll("[data-image-action]").forEach(b => b.disabled = false);
+  }
+}
 
 async function startAiFix() {
   $("aiFix").disabled = true;

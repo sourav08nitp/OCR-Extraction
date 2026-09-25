@@ -490,7 +490,7 @@ def classify_figures(doc, img_dir):
     n = 0
     for sec in _sections(doc):
         for name, r in sec.get("equations_latex", {}).items():
-            if r.get("source") == "figure":
+            if r.get("source") in ("figure", "skipped"):
                 continue
             why = figure_reason(Image.open(img_dir / name).convert("RGB"))
             if why:
@@ -505,6 +505,37 @@ def _sections(doc):
         for q in ex["questions"]:
             for key in ("question", "solution"):
                 yield q[key]
+
+
+def image_sections(doc, name):
+    """Every question or solution section that still refers to this image."""
+    return [sec for sec in _sections(doc) if name in sec.get("equations", [])]
+
+
+def set_image_result(doc, name, result):
+    """Apply a reviewed reading to every occurrence of the same PDF image."""
+    sections = image_sections(doc, name)
+    for sec in sections:
+        sec.setdefault("equations_latex", {})[name] = dict(result)
+    if sections:
+        build_text_latex(doc)
+    return len(sections)
+
+
+def remove_image(doc, name):
+    """Remove an image from extracted text and export, while keeping its PNG on disk."""
+    sections = image_sections(doc, name)
+    token = f"[[eq:{name}]]"
+    for sec in sections:
+        sec["equations"] = [n for n in sec["equations"] if n != name]
+        sec.get("equations_latex", {}).pop(name, None)
+        sec["text"] = re.sub(r"[ \t]{2,}", " ", sec["text"].replace(token, "")).strip()
+    if sections:
+        deleted = doc.setdefault("deleted_images", [])
+        if name not in deleted:
+            deleted.append(name)
+        build_text_latex(doc)
+    return len(sections)
 
 
 def validate_latex(doc):
@@ -648,6 +679,8 @@ def restructure(pdf_path, out_dir):
             sec["equations_latex"] = {n: dict(known[n]) for n in sec["equations"] if n in known}
         doc["figures_checked"] = old.get("figures_checked", False)
         build_text_latex(doc)
+    for name in old.get("deleted_images", []):
+        remove_image(doc, name)
     save(doc, out_dir)
     return doc
 
