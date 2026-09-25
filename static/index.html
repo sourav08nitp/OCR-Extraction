@@ -267,7 +267,7 @@ function showProgress() {
   $("result").style.display = "none";
   $("pErr").textContent = "";
   $("progress").style.display = "block";
-  poll();
+  poll(jobId);
 }
 
 const STAGES = {
@@ -280,16 +280,19 @@ const STAGES = {
   "waiting in queue": "Waiting for the previous job to finish",
 };
 
-async function poll() {
+async function poll(id) {
+  if (id !== jobId) return;
   let j;
   try {
-    const r = await fetch(`/api/jobs/${jobId}`);
+    const r = await fetch(`/api/jobs/${id}`);
+    if (id !== jobId) return;
     if (r.status === 404) { $("pErr").textContent = "This job no longer exists (the server was restarted). Upload again."; addRestart($("progress")); return; }
     j = await r.json();
-  } catch { setTimeout(poll, 2000); return; }
+    if (id !== jobId) return;
+  } catch { if (id === jobId) setTimeout(() => poll(id), 2000); return; }
 
   if (j.status === "error") { $("pErr").textContent = j.error; addRestart($("progress")); return; }
-  if (j.status === "done") { loadResult(); return; }
+  if (j.status === "done") { loadResult(id); return; }
 
   $("pTitle").textContent = STAGES[j.stage] || j.stage;
   const bar = $("bar");
@@ -302,7 +305,7 @@ async function poll() {
     bar.firstElementChild.style.width = "";
     $("pText").textContent = j.filename;
   }
-  setTimeout(poll, 1000);
+  setTimeout(() => poll(id), 1000);
 }
 
 function addRestart(where) {
@@ -314,9 +317,11 @@ function addRestart(where) {
 }
 
 // ---------- results ----------
-async function loadResult() {
-  const r = await fetch(`/api/jobs/${jobId}/result`);
-  doc = await r.json();
+async function loadResult(id) {
+  const r = await fetch(`/api/jobs/${id}/result`);
+  const result = await r.json();
+  if (id !== jobId) return;
+  doc = result;
   $("progress").style.display = "none";
   $("result").style.display = "block";
   render();
@@ -630,11 +635,22 @@ async function bulk(jobs, push) {
     + ` — ${q} question(s), ${imgs} image(s)` + (failed.length ? ` · ${failed.length} failed` : "");
   if (failed.length) console.warn("Failed chapters:\n" + failed.join("\n"));
 }
-if (!location.hash) drawJobList();
-
-// resume a job after a page reload
-const m = location.hash.match(/job=([a-f0-9]+)/);
-if (m) { jobId = m[1]; showProgress(); }
+// A Results link changes only the hash, so handle it without requiring a page reload.
+function showLocation() {
+  const m = location.hash.match(/^#job=([a-f0-9]+)$/);
+  if (m) {
+    jobId = m[1];
+    showProgress();
+  } else {
+    jobId = null;
+    $("progress").style.display = "none";
+    $("result").style.display = "none";
+    $("upload").style.display = "block";
+    drawJobList();
+  }
+}
+window.addEventListener("hashchange", showLocation);
+showLocation();
 </script>
 </body>
 </html>
