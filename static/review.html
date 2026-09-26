@@ -273,6 +273,11 @@ function onPage(q, page = pageNo) {
     .some(r => r.page === page);
 }
 function pageQuestions() { return data.questions.filter(q => onPage(q)); }
+function adjacentQuestion(key, direction) {
+  const list = data.questions.filter(q => filter === 'all' || status(q) === filter || q.key === key);
+  const index = list.findIndex(q => q.key === key);
+  return index < 0 ? null : list[index + direction] || null;
+}
 function stashTextEdit() {
   if (!editKey) return;
   const row = $("sideBody").querySelector('.qrow[data-key="' + CSS.escape(editKey) + '"]');
@@ -698,18 +703,18 @@ function questionBody(q) {
     ${fld("paper", "Paper", `<input data-f="paper" value="${esc(m.paper || "")}" placeholder="${esc(d.paper || "")}">`)}
     ${fld("flagged", "Flagged", tri("flagged", "Yes, needs attention", "No", `Automatic: ${a.flagged ? "yes" : "no"}`))}
     ${fld("skip", "Leave out of export", tri("skip", "Yes, skip this question", "No", "No"))}
-    <div class="navbtns"><button class="ghost" data-nav="-1">&larr; Previous</button><button class="ghost" data-nav="1">Next &rarr;</button></div>
+    <div class="navbtns"><button class="ghost" data-nav="-1" ${adjacentQuestion(q.key, -1) ? '' : 'disabled'}>&larr; Previous</button><button class="ghost" data-nav="1" ${adjacentQuestion(q.key, 1) ? '' : 'disabled'}>Next &rarr;</button></div>
   </div>`;
 }
 
-function openQuestion(key) {
+function openQuestion(key, { fromStart = false } = {}) {
   if (editKey && editKey !== key) { stashTextEdit(); editKey = null; }
   openKey = key;
   const q = data.questions.find(x => x.key === key);
   drawQuestions({ revealKey: key });
   // highlight each line rather than one big box: figures often sit in a column beside the text
   const regions = q && (q.auto.lineRegions?.length ? q.auto.lineRegions : q.auto.regions?.length ? q.auto.regions : q.auto.sourceRegion ? [q.auto.sourceRegion] : []);
-  if (regions?.length) showPage(onPage(q) ? pageNo : regions[0].page, regions);
+  if (regions?.length) showPage(!fromStart && onPage(q) ? pageNo : (q.auto.regions[0]?.page ?? regions[0].page), regions);
 }
 
 $("sideBody").addEventListener("click", e => {
@@ -718,9 +723,9 @@ $("sideBody").addEventListener("click", e => {
   if (e.target.closest("[data-expand]")) { stashTextEdit(); expandAll = !expandAll; drawQuestions(); return; }
   const nav = e.target.closest("[data-nav]");
   if (nav) {
-    const list = pageQuestions().filter(q => filter === "all" || status(q) === filter || q.key === openKey);
-    const i = list.findIndex(q => q.key === openKey) + Number(nav.dataset.nav);
-    if (list[i]) openQuestion(list[i].key);
+    const key = nav.closest('.qrow')?.dataset.key;
+    const target = adjacentQuestion(key, Number(nav.dataset.nav));
+    if (target) openQuestion(target.key, { fromStart: true });
     return;
   }
   const act = e.target.closest("[data-act]");
