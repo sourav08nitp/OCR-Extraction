@@ -69,6 +69,7 @@
   .missing input, .missing select { border-color: var(--warn); background: var(--warn-soft); }
 
   .filters { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .page-summary { font-weight: 600; color: var(--accent); margin-bottom: 8px; }
   .filters button { padding: 4px 12px; border-radius: 99px; font-weight: 500; background: var(--panel); color: var(--ink); border: 1px solid var(--line); }
   .filters button.on { background: var(--accent); color: var(--panel); border-color: var(--accent); }
   .qrow { border: 1px solid var(--line); border-radius: 10px; background: var(--panel); margin-bottom: 8px; }
@@ -265,7 +266,24 @@ async function save() {
 
 // ---------------- PDF viewer ----------------
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-let pdf = null, pageNo = 1, zoom = 1, renderTask = null, highlights = [];
+let pdf = null, pageNo = 1, zoom = 1, renderTask = null, highlights = [], pageRenderSeq = 0;
+
+function onPage(q, page = pageNo) {
+  return [...(q.auto.regions || []), ...(q.auto.lineRegions || []), ...(q.auto.sourceRegion ? [q.auto.sourceRegion] : [])]
+    .some(r => r.page === page);
+}
+function pageQuestions() { return data.questions.filter(q => onPage(q)); }
+function stashTextEdit() {
+  if (!editKey) return;
+  const row = $("sideBody").querySelector('.qrow[data-key="' + CSS.escape(editKey) + '"]');
+  const q = data.questions.find(q => q.key === editKey);
+  if (!row || !q) return;
+  const stem = row.querySelector('.ed-stem'), sol = row.querySelector('.ed-sol');
+  let changed = false;
+  if (stem && stem.value !== stemOf(q)) { q.manual.stemOverride = stem.value; changed = true; }
+  if (sol && sol.value !== solOf(q)) { q.manual.solutionOverride = sol.value; changed = true; }
+  if (changed) scheduleSave();
+}
 
 async function loadPdf() {
   pdf = await pdfjsLib.getDocument(`/api/jobs/${jobId}/pdf`).promise;
@@ -273,9 +291,23 @@ async function loadPdf() {
 }
 async function showPage(n, regions) {
   if (!pdf) return;
-  pageNo = Math.max(1, Math.min(pdf.numPages, n));
+  const next = Math.max(1, Math.min(pdf.numPages, n)), changed = next !== pageNo;
+  if (changed) {
+    stashTextEdit();
+    pageNo = next;
+    if (!data.questions.some(q => q.key === openKey && onPage(q))) openKey = null;
+    if (!data.questions.some(q => q.key === editKey && onPage(q))) editKey = null;
+    highlights = [];
+    if (tab === 'questions') {
+      drawQuestions({ revealKey: openKey });
+      if (!openKey) $("sideBody").scrollTop = 0;
+    }
+  }
   if (regions) highlights = regions;
-  const page = await pdf.getPage(pageNo);
+  const seq = ++pageRenderSeq, currentPage = pageNo;
+  if (renderTask) renderTask.cancel();
+  const page = await pdf.getPage(currentPage);
+  if (seq !== pageRenderSeq) return;
   const avail = $("pdfScroll").clientWidth - 32;
   const base = page.getViewport({ scale: 1 });
   const vp = page.getViewport({ scale: (avail / base.width) * zoom });
@@ -283,13 +315,13 @@ async function showPage(n, regions) {
   c.width = Math.floor(vp.width * ratio); c.height = Math.floor(vp.height * ratio);
   c.style.width = vp.width + "px"; c.style.height = vp.height + "px";
   $("pageWrap").style.width = vp.width + "px";
-  if (renderTask) renderTask.cancel();
   renderTask = page.render({ canvasContext: c.getContext("2d"), viewport: vp, transform: ratio !== 1 ? [ratio, 0, 0, ratio, 0, 0] : null });
   try { await renderTask.promise; } catch { return; }
-  $("pgLabel").textContent = `Page ${pageNo} / ${pdf.numPages}`;
+  if (seq !== pageRenderSeq) return;
+  $("pgLabel").textContent = `Page ${currentPage} / ${pdf.numPages}`;
   $("pageWrap").querySelectorAll(".hl").forEach(e => e.remove());
   let first = null;
-  for (const r of highlights.filter(r => r.page === pageNo)) {
+  for (const r of highlights.filter(r => r.page === currentPage).sort((a, b) => a.bbox[1] - b.bbox[1])) {
     const [x0, y0, x1, y1] = r.bbox, pad = 2;
     const d = document.createElement("div");
     d.className = "hl";
@@ -298,10 +330,10 @@ async function showPage(n, regions) {
     $("pageWrap").appendChild(d);
     first = first || d;
   }
-  if (first) {
+  if (first && regions) {
     const sc = $("pdfScroll");
     sc.scrollTop += first.getBoundingClientRect().top - sc.getBoundingClientRect().top - 40;
-  }
+  } else if (changed) $("pdfScroll").scrollTop = 0;
 }
 $("prevPg").onclick = () => showPage(pageNo - 1);
 $("nextPg").onclick = () => showPage(pageNo + 1);
@@ -579,13 +611,19 @@ $("sideBody").addEventListener("input", e => {
   scheduleSave();
 });
 
-function drawQuestions() {
-  const counts = drawProgress();
-  const F = [["all", "All", data.questions.length], ["need", "Needs input", counts.need], ["flag", "Flagged", counts.flag], ["done", "Ready", counts.done]];
-  let html = `<div class="filters">${F.map(([id, l, n]) => `<button data-filter="${id}" class="${filter === id ? "on" : ""}">${l} ${n}</button>`).join("")}
+function drawQuestions({ anchorKey = null, revealKey = null } = {}) {
+  stashTextEdit();
+  const side = $("sideBody"), oldScroll = side.scrollTop;
+  const anchorSelector = anchorKey ? '.qrow[data-key="' + CSS.escape(anchorKey) + '"] .tools' : null;
+  const anchorTop = anchorSelector ? side.querySelector(anchorSelector)?.getBoundingClientRect().top : null;
+  drawProgress();
+  const scoped = pageQuestions(), counts = {need:0, flag:0, done:0};
+  scoped.forEach(q => { const s = status(q); if (s in counts) counts[s]++; });
+  const F = [["all", "All", scoped.length], ["need", "Needs input", counts.need], ["flag", "Flagged", counts.flag], ["done", "Ready", counts.done]];
+  let html = `<div class="page-summary">Page ${pageNo} · ${scoped.length} question${scoped.length === 1 ? '' : 's'}</div><div class="filters">${F.map(([id, l, n]) => `<button data-filter="${id}" class="${filter === id ? "on" : ""}">${l} ${n}</button>`).join("")}
     <button data-expand="1" class="${expandAll ? "on" : ""}" title="Show every question's details at once">${expandAll ? "Collapse all" : "Expand all"}</button></div>`;
-  const list = data.questions.filter(q => filter === "all" || status(q) === filter);
-  if (!list.length) html += `<div class="empty">Nothing here.</div>`;
+  const list = scoped.filter(q => filter === "all" || status(q) === filter || q.key === openKey);
+  if (!list.length) html += `<div class="empty">No matching questions on page ${pageNo}. Use the PDF page arrows to continue.</div>`;
   for (const q of list) {
     const st = status(q), a = q.auto;
     const snip = (stemOf(q) || "").replace(/\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\]|\$[^$]+\$/g, "…")
@@ -596,9 +634,14 @@ function drawQuestions() {
       ${expandAll || openKey === q.key ? questionBody(q) : ""}
     </div>`;
   }
-  $("sideBody").innerHTML = html;
-  const open = $("sideBody").querySelector(".qrow.sel");
-  if (open) open.scrollIntoView({ block: "nearest" });
+  side.innerHTML = html;
+  side.scrollTop = oldScroll;
+  const replacement = anchorSelector && side.querySelector(anchorSelector);
+  if (replacement && anchorTop != null) side.scrollTop += replacement.getBoundingClientRect().top - anchorTop;
+  if (revealKey) {
+    const head = side.querySelector('.qrow[data-key="' + CSS.escape(revealKey) + '"] .qhead');
+    if (head) side.scrollTop += head.getBoundingClientRect().top - side.getBoundingClientRect().top - 12;
+  }
 }
 
 function questionBody(q) {
@@ -660,20 +703,22 @@ function questionBody(q) {
 }
 
 function openQuestion(key) {
+  if (editKey && editKey !== key) { stashTextEdit(); editKey = null; }
   openKey = key;
   const q = data.questions.find(x => x.key === key);
-  drawQuestions();
+  drawQuestions({ revealKey: key });
   // highlight each line rather than one big box: figures often sit in a column beside the text
-  if (q && q.auto.regions.length) showPage(q.auto.regions[0].page, q.auto.lineRegions?.length ? q.auto.lineRegions : q.auto.regions);
+  const regions = q && (q.auto.lineRegions?.length ? q.auto.lineRegions : q.auto.regions?.length ? q.auto.regions : q.auto.sourceRegion ? [q.auto.sourceRegion] : []);
+  if (regions?.length) showPage(onPage(q) ? pageNo : regions[0].page, regions);
 }
 
 $("sideBody").addEventListener("click", e => {
   const fb = e.target.closest("[data-filter]");
-  if (fb) { filter = fb.dataset.filter; drawQuestions(); return; }
-  if (e.target.closest("[data-expand]")) { expandAll = !expandAll; drawQuestions(); return; }
+  if (fb) { stashTextEdit(); filter = fb.dataset.filter; drawQuestions(); return; }
+  if (e.target.closest("[data-expand]")) { stashTextEdit(); expandAll = !expandAll; drawQuestions(); return; }
   const nav = e.target.closest("[data-nav]");
   if (nav) {
-    const list = data.questions.filter(q => filter === "all" || status(q) === filter || q.key === openKey);
+    const list = pageQuestions().filter(q => filter === "all" || status(q) === filter || q.key === openKey);
     const i = list.findIndex(q => q.key === openKey) + Number(nav.dataset.nav);
     if (list[i]) openQuestion(list[i].key);
     return;
@@ -697,7 +742,7 @@ $("sideBody").addEventListener("click", e => {
   const head = e.target.closest(".qhead");
   if (head) {
     const key = head.parentElement.dataset.key;
-    if (openKey === key && !expandAll) { openKey = null; drawQuestions(); } else openQuestion(key);
+    if (openKey === key && !expandAll) { stashTextEdit(); editKey = null; openKey = null; drawQuestions(); } else openQuestion(key);
   }
 });
 
@@ -740,7 +785,7 @@ async function questionAction(btn) {
     delete q.manual.stemOverride; delete q.manual.solutionOverride; delete q.manual.aiReread;
   } else if (a === "ai") {
     if (edited(q) && !confirm("This replaces your current text for this question with the AI's reading. Continue?")) return;
-    aiBusy = q.key; drawQuestions();
+    aiBusy = q.key; drawQuestions({ anchorKey: q.key });
     try {
       const r = await fetch(`/api/jobs/${jobId}/questions/${q.key}/ai`, { method: "POST" });
       const j = await r.json().catch(() => ({}));
@@ -751,7 +796,7 @@ async function questionAction(btn) {
     } catch (err) { toast("AI re-read failed: " + err.message); }
     aiBusy = null;
   } else if (a === "tag") {
-    tagBusy = q.key; drawQuestions();
+    tagBusy = q.key; drawQuestions({ anchorKey: q.key });
     try {
       const r = await fetch(`/api/jobs/${jobId}/questions/${q.key}/topic`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
@@ -763,11 +808,11 @@ async function questionAction(btn) {
     } catch (err) { toast("Could not tag: " + err.message); }
     tagBusy = null;
   }
-  drawQuestions();
+  drawQuestions({ anchorKey: q.key });
   scheduleSave();
 }
 
-document.querySelectorAll(".tab").forEach(t => t.onclick = () => { tab = t.dataset.tab; draw(); });
+document.querySelectorAll(".tab").forEach(t => t.onclick = () => { stashTextEdit(); tab = t.dataset.tab; draw(); });
 
 // ---------------- export ----------------
 $("exportBtn").onclick = async () => {
