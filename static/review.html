@@ -604,7 +604,7 @@ const DOC_FORM = [
     ["module", "Module", "text", "e.g. Resonance, NCERT"],
     ["chapter", "Chapter", "text", null],
     ["subject", "Subject", "text", "e.g. Chemistry"],
-    ["exam", "Exam name", "text", "e.g. CBSE, JEE-MAIN, NEET. Applies to this chapter; PYQ exam is set separately below."],
+    ["exam", "Exam name", "exam", "Applies to this chapter; PYQ exam is set separately below."],
     ["section", "Path section", "text", "e.g. All sections"],
   ]],
   ["Defaults for every question (each question can override)", [
@@ -648,6 +648,11 @@ function drawDocument() {
       const v = d[f] ?? "";
       let input;
       if (kind === "select") input = selectHtml(f, v, data.options[f].map(o => [o, o]), "— choose —");
+      else if (kind === "exam") {
+        const exams = ["JEE", "NEET", "BOARDS"];
+        if (v && !exams.includes(v)) exams.push(v);
+        input = selectHtml(f, v, exams.map(exam => [exam, exam]), "— select exam —");
+      }
       else if (kind === "pyq") input = selectHtml(f, v === true ? "yes" : v === false ? "no" : "", [["yes", "Yes, all are past-paper questions"], ["no", "No"]], "Detect from the text (e.g. [JEE-2005])");
       else if (kind === "answerFrom") input = selectHtml(f, v, [["answer", "answer (always)"], ["explanation", "explanation (always)"]],
         "Automatic: 'Answer' headings → answer, 'Solution' → explanation");
