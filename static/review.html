@@ -218,7 +218,7 @@ function displayText(q, part) {
   }
   return text;
 }
-let editKey = null, aiBusy = null, tagBusy = null;
+let editKey = null, aiBusy = null, tagBusy = null, extractBusy = null;
 
 // effective value: question override, else document default, else automatic
 function eff(q, f) {
@@ -262,7 +262,8 @@ async function save() {
       body: JSON.stringify({ document: data.document, questions }) });
     if (!r.ok) throw new Error(r.statusText);
     $("saveState").textContent = "Saved";
-  } catch (e) { $("saveState").textContent = "Save failed"; toast("Could not save: " + e.message); }
+    return true;
+  } catch (e) { $("saveState").textContent = "Save failed"; toast("Could not save: " + e.message); return false; }
 }
 
 // ---------------- PDF viewer ----------------
@@ -364,6 +365,17 @@ function startAddQuestion() {
   $("cropHint").hidden = false;
   $("cropHint").textContent = "Drag a box round the whole question — its answer too, if it has one. The AI will read it. Esc to cancel";
 }
+async function startExtract(key, part) {
+  if (extractBusy) { toast("Wait for the current extraction to finish"); return; }
+  stashTextEdit();
+  clearTimeout(saveTimer);
+  if (!await save()) return;
+  const q = data.questions.find(q => q.key === key);
+  cropMode = { key, part, extract: true };
+  $("pageWrap").classList.add("cropping");
+  $("cropHint").hidden = false;
+  $("cropHint").textContent = `Draw a box to AI-read and replace Q${q.auto.label}'s ${part === 'stem' ? 'question' : 'answer'} text only — Esc to cancel`;
+}
 function endCrop() {
   cropMode = null;
   $("pageWrap").classList.remove("cropping");
@@ -374,6 +386,7 @@ document.addEventListener("keydown", e => { if (e.key === "Escape" && cropMode) 
 
 $("pageWrap").addEventListener("mousedown", e => {
   if (!cropMode) return;
+  const selection = cropMode, selectedPage = pageNo;
   e.preventDefault();
   const wrap = $("pageWrap"), rect = wrap.getBoundingClientRect();
   const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
@@ -389,18 +402,20 @@ $("pageWrap").addEventListener("mousedown", e => {
   const finish = async ev => {
     document.removeEventListener("mousemove", draw);
     document.removeEventListener("mouseup", finish);
+    if (cropMode !== selection) { box.remove(); return; }
     draw(ev);
     const b = box.getBoundingClientRect();
     const bbox = [(b.left - rect.left) / rect.width, (b.top - rect.top) / rect.height,
                   (b.right - rect.left) / rect.width, (b.bottom - rect.top) / rect.height];
-    const { key, part, add } = cropMode;
+    const { key, part, add, extract } = selection;
     endCrop();
     if (b.width < 8 || b.height < 8) { toast("That selection was too small"); return; }
-    if (add) return addQuestionFromBox(bbox);
+    if (add) return addQuestionFromBox(bbox, selectedPage);
+    if (extract) return extractFromBox(key, part, bbox, selectedPage);
     try {
       const r = await fetch(`/api/jobs/${jobId}/questions/${key}/crop`, {
         method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ part, page: pageNo, bbox }) });
+        body: JSON.stringify({ part, page: selectedPage, bbox }) });
       const j = await r.json();
       if (!r.ok) throw new Error(j.error || r.statusText);
       const q = data.questions.find(x => x.key === key);
@@ -414,14 +429,14 @@ $("pageWrap").addEventListener("mousedown", e => {
 });
 
 // box on the PDF -> AI reads it -> a brand new question
-async function addQuestionFromBox(bbox) {
+async function addQuestionFromBox(bbox, page = pageNo) {
   const btn = $("addQBtn");
   btn.disabled = true;
   btn.textContent = "Reading the box with AI…";
   try {
     const r = await fetch(`/api/jobs/${jobId}/questions/add`, {
       method: "POST", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ page: pageNo, bbox }) });
+      body: JSON.stringify({ page, bbox }) });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || r.statusText);
     await reloadReview();
@@ -436,6 +451,29 @@ async function addQuestionFromBox(bbox) {
     btn.disabled = false;
     btn.textContent = "➕ Add question";
   }
+}
+
+async function extractFromBox(key, part, bbox, page) {
+  extractBusy = { key, part };
+  drawQuestions({ anchorKey: key });
+  toast(`AI reading the selected ${part === 'stem' ? 'question' : 'answer'} box…`);
+  try {
+    const r = await fetch(`/api/jobs/${jobId}/questions/${encodeURIComponent(key)}/extract`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ part, page, bbox }) });
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    stashTextEdit();
+    if (editKey === key) editKey = null;
+    const q = data.questions.find(q => q.key === key);
+    if (q) q.manual[j.field] = j.text;
+    const warnings = [];
+    if (j.katexErrors?.length) warnings.push(`${j.katexErrors.length} maths piece(s) need checking`);
+    if (j.missingFigures) warnings.push('use Crop to add any missing diagrams');
+    toast(`${part === 'stem' ? 'Question' : 'Answer'} text replaced from the selected box` + (warnings.length ? ` — ${warnings.join('; ')}` : ''));
+  } catch (e) { toast('Could not extract: ' + e.message); }
+  extractBusy = null;
+  drawQuestions({ anchorKey: key });
 }
 
 async function deleteAddedQuestion(key) {
@@ -677,6 +715,8 @@ function questionBody(q) {
         <button class="ghost" data-act="edit">✎ Edit text</button>
         <button class="ghost" data-act="crop-stem" title="Drag a box on the PDF to add that part of the page as an image in the question">✂ Crop → question</button>
         <button class="ghost" data-act="crop-sol" title="Drag a box on the PDF to add that part of the page as an image in the answer">✂ Crop → answer</button>
+        ${data.aiAvailable ? `<button class="ghost" data-act="extract-stem" ${extractBusy ? 'disabled' : ''} title="Draw a PDF box; AI replaces only this question's question text">${extractBusy?.key === q.key && extractBusy.part === 'stem' ? 'Reading question…' : '✨ Extract → question'}</button>
+        <button class="ghost" data-act="extract-sol" ${extractBusy ? 'disabled' : ''} title="Draw a PDF box; AI replaces only this question's answer text">${extractBusy?.key === q.key && extractBusy.part === 'sol' ? 'Reading answer…' : '✨ Extract → answer'}</button>` : ''}
         ${data.aiAvailable ? `<button class="ghost" data-act="ai" ${busy ? "disabled" : ""} title="Sends the highlighted box to the AI and replaces the question and solution text with its reading">${busy ? "Reading with AI…" : "✨ Re-read with AI"}</button>` : ""}
         ${data.aiAvailable ? `<button class="ghost" data-act="tag" ${tagBusy === q.key ? "disabled" : ""} title="Asks the AI for this one question's topic (from the chapter's list) and difficulty level">${tagBusy === q.key ? "Choosing…" : "🏷 Topic &amp; level with AI"}</button>` : ""}
         ${edited(q) ? `<button class="ghost" data-act="reset" title="Throw away your edits / the AI reading">↺ Reset to automatic</button>` : ""}
@@ -787,6 +827,9 @@ async function questionAction(btn) {
     if (i < 0) return;
     q.manual[field] = (text.slice(0, i) + text.slice(i + token.length)).replace(/\n{3,}/g, "\n\n").trim();
     toast("Image removed — ↺ Reset to automatic brings it back");
+  } else if (a === "extract-stem" || a === "extract-sol") {
+    startExtract(q.key, a === 'extract-stem' ? 'stem' : 'sol');
+    return;
   } else if (a === "crop-stem" || a === "crop-sol") {
     startCrop(q.key, a === "crop-stem" ? "stem" : "sol");
     return;

@@ -897,6 +897,57 @@ def crop_region(job_dir, key, part, page, bbox_norm):
     return {"name": name, "field": field, "text": m[field]}
 
 
+def extract_region(job_dir, key, part, page, bbox_norm):
+    """Read a selected PDF box into one existing question part, keeping the other part intact."""
+    import math
+    import ai_fallback
+
+    if part not in ("stem", "sol"):
+        raise ValueError("choose question or answer")
+    if len(bbox_norm) != 4 or any(not math.isfinite(v) or not 0 <= v <= 1 for v in bbox_norm):
+        raise ValueError("selection must be four coordinates within the page")
+    job_dir = Path(job_dir)
+    doc = ensure_current(job_dir)
+    _, q = find_question(doc, key)
+    sizes = {int(k): v for k, v in doc.get("page_sizes", {}).items()}
+    if page not in sizes:
+        raise ValueError(f"page {page} is not in this PDF")
+    w, h = sizes[page]
+    x0, y0, x1, y1 = bbox_norm
+    box = [min(x0, x1) * w, min(y0, y1) * h, max(x0, x1) * w, max(y0, y1) * h]
+    if box[2] - box[0] < 5 or box[3] - box[1] < 5:
+        raise ValueError("that selection is too small to read")
+    saved = load_review(job_dir)
+    field = "stemOverride" if part == "stem" else "solutionOverride"
+    original = saved["questions"].get(key, {}).get(field)
+    if original is None:
+        original = _neutral(q["question" if part == "stem" else "solution"])
+    info = {**q["question"].get("equations_latex", {}), **q["solution"].get("equations_latex", {})}
+    candidates = list(dict.fromkeys(q["question"].get("equations", []) + q["solution"].get("equations", []) + IMG_REF.findall(original)))
+    boxes = {**doc.get("image_boxes", {}), **saved["manualImages"]}
+    figures = []
+    for name in candidates:
+        b = boxes.get(name)
+        if not b or b["page"] != page or (info.get(name, {}).get("source") != "figure" and name not in saved["manualImages"]):
+            continue
+        bx0, by0, bx1, by1 = b["bbox"]
+        if box[0] <= (bx0 + bx1) / 2 <= box[2] and box[1] <= (by0 + by1) / 2 <= box[3]:
+            figures.append(name)
+    result = ai_fallback.transcribe_region(region_png(job_dir / "input.pdf", [{"page": page, "bbox": box}], pad=0), len(figures), part=part)
+    text = "\n\n".join(t.strip() for t in (result["question"], result["solution"]) if t.strip())
+    if not text:
+        raise ValueError("AI found no readable text in that selection; the question was left unchanged")
+    missing_figures = max(0, text.count("[[FIGURE]]") - len(figures))
+    text = to_paren_delims(place_figures(text, original, figures))
+    if not text.strip():
+        raise ValueError("AI found no readable text in that selection; the question was left unchanged")
+    saved = load_review(job_dir)
+    manual = saved["questions"].setdefault(key, {})
+    manual[field] = text
+    save_review(job_dir, saved)
+    return {"field": field, "text": manual[field], "katexErrors": result["katexErrors"], "missingFigures": missing_figures}
+
+
 def _slot_for(doc, page):
     """Which exercise a question cropped from this page belongs to, and the next free number in it."""
     on_page, numbers = {}, {}

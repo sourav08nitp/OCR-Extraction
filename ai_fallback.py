@@ -182,13 +182,18 @@ def maths_spans(text):
     return [m.group(1) or m.group(2) or m.group(3) or "" for m in RE_MATH.finditer(text or "")]
 
 
-def transcribe_region(png_bytes, n_figures=0):
+def transcribe_region(png_bytes, n_figures=0, part=None):
     r"""One whole question (its highlighted box) -> {"question", "solution", "katexErrors"} with \(...\) maths."""
     from openai import OpenAI
 
     client = OpenAI(timeout=120, max_retries=3)
     hint = f" (this question has {n_figures} figure(s))" if n_figures else ""
     prompt = REGION_PROMPT.replace("{fig_hint}", hint)
+    if part in ("stem", "sol"):
+        field = "question" if part == "stem" else "solution"
+        prompt += (f"\nThis selected box contains only the {field} part of an existing question. "
+                   f"Transcribe everything visible into the JSON '{field}' field and leave the other field empty. "
+                   "Do not solve, complete, or invent content outside this box.")
     content = [{"type": "text", "text": prompt},
                {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(png_bytes).decode()}}]
     messages = [{"role": "user", "content": content}]
