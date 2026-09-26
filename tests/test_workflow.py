@@ -3,7 +3,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, MagicMock, patch
 
 import app
 import review
@@ -98,6 +98,34 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(self.client.patch(route, json={'stemOverride': None}).status_code, 400)
         self.assertEqual(self.client.patch('/api/jobs/abc123/questions/unknown/text',
                                            json={'stemOverride': 'Text'}).status_code, 404)
+
+    def test_exam_saved_exported_and_sent_to_ingest(self):
+        from tools import push_mongo
+        saved = review.load_review(self.job)
+        saved['document']['exam'] = ' CBSE '
+        response = self.client.put('/api/jobs/abc123/review', json={
+            'document': saved['document'], 'questions': saved['questions']})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(review.load_review(self.job)['document']['exam'], ' CBSE ')
+        records = review.export(self.job)
+        self.assertEqual(records[0]['exam'], 'CBSE')
+        self.assertFalse(records[0]['isPyq'])
+        self.assertIsNone(records[0]['pyqExam'])
+        mongo_record = push_mongo.to_document(records[0])
+        self.assertEqual(mongo_record['exam'], 'CBSE')
+        database = MagicMock()
+        database['ingest_extracted_questions'].bulk_write.return_value = Mock(upserted_count=1, modified_count=0)
+        result = push_mongo.push_records(records, database=database, collection='ingest_extracted_questions',
+                                         write=True, images='skip', file_name='Test.pdf')
+        self.assertTrue(result['wrote'])
+        question_update = database['ingest_extracted_questions'].bulk_write.call_args.args[0][0]
+        self.assertEqual(question_update._doc['$set']['exam'], 'CBSE')
+        chapter_update = database['ingest_documents'].update_one.call_args.args[1]
+        self.assertEqual(chapter_update['$set']['exam'], 'CBSE')
+        saved = review.load_review(self.job)
+        saved['document']['exam'] = ''
+        review.save_review(self.job, saved)
+        self.assertIsNone(review.export(self.job)[0]['exam'])
 
     def test_incomplete_flagged_and_empty_exports_cannot_finalize(self):
         for changes in ({'topic': ''}, {'flagged': True}, {'skip': True}):

@@ -25,7 +25,7 @@ MANUAL_FIELDS = ["topic", "level", "questionType", "sectionName", "isPyq", "pyqE
 # edited text refers to images as ![](img:NAME); they become real URLs on screen and in the export
 IMG_REF = re.compile(r"!\[\]\(img:([^)\s]+)\)")
 # document-level settings shown on the Document tab
-DOC_FIELDS = ["documentId", "module", "chapter", "subject", "section", "sectionName", "questionType", "level",
+DOC_FIELDS = ["documentId", "module", "chapter", "subject", "exam", "section", "sectionName", "questionType", "level",
               "topic", "isPyq", "pyqExam", "pyqYear", "paper", "answerFrom", "imageBaseUrl",
               "syllabusChapter", "topics"]
 TOPICS_FILE = Path(__file__).resolve().parent / "topics.json"
@@ -428,6 +428,7 @@ def build_record(doc, key, ex, q, review, image_url, now, px_size=None):
         "sectionName": _pick(m, d, a, "sectionName"),
         "topic": _pick(m, d, a, "topic"),
         "subject": d.get("subject") or None,
+        "exam": (d.get("exam") or "").strip() or None,
         "flagged": bool(m["flagged"]) if m.get("flagged") is not None else a["flagged"],
         "isPyq": bool(is_pyq) if is_pyq is not None else False,
         "pyqExam": _pick(m, d, a, "pyqExam") if is_pyq else None,
