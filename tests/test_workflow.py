@@ -69,6 +69,36 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 400, response.json)
         self.assertIn('image file(s) missing', response.json['error'])
 
+    def test_preview_edit_updates_only_selected_text(self):
+        path = self.job / 'out' / 'structured.json'
+        doc = json.loads(path.read_text(encoding='utf-8'))
+        doc['exercises'][0]['questions'].append({'number': 2, 'question': {'text': 'Another question'},
+                                                'solution': {'text': 'Another answer'}})
+        path.write_text(json.dumps(doc), encoding='utf-8')
+        saved = review.load_review(self.job)
+        saved['questions'] = {'0-0': {'level': 'medium'}, '0-1': {'skip': True, 'stemOverride': 'Other edited text'}}
+        review.save_review(self.job, saved)
+        self.finalize()
+        before = review.load_review(self.job)
+        route = '/api/jobs/abc123/questions/0-0/text'
+        unchanged = self.client.patch(route, json={'stemOverride': 'What is 1 + 1?', 'solutionOverride': '2'})
+        self.assertEqual(unchanged.json['workflow']['stage'], 'ready')
+        updated = self.client.patch(route, json={'stemOverride': 'Updated question ![](img:diagram.png)',
+                                                 'solutionOverride': ''})
+        self.assertEqual(updated.status_code, 200, updated.json)
+        after = review.load_review(self.job)
+        self.assertEqual(after['document'], before['document'])
+        self.assertEqual(after['ids'], before['ids'])
+        self.assertEqual(after['questions']['0-1'], before['questions']['0-1'])
+        self.assertEqual(after['questions']['0-0']['level'], 'medium')
+        self.assertEqual(after['questions']['0-0']['solutionOverride'], '')
+        self.assertIn('img:diagram.png', after['questions']['0-0']['stemOverride'])
+        self.assertEqual(updated.json['workflow']['stage'], 'review')
+        self.assertEqual(self.client.patch(route, json={'skip': True}).status_code, 400)
+        self.assertEqual(self.client.patch(route, json={'stemOverride': None}).status_code, 400)
+        self.assertEqual(self.client.patch('/api/jobs/abc123/questions/unknown/text',
+                                           json={'stemOverride': 'Text'}).status_code, 404)
+
     def test_incomplete_flagged_and_empty_exports_cannot_finalize(self):
         for changes in ({'topic': ''}, {'flagged': True}, {'skip': True}):
             saved = review.load_review(self.job)

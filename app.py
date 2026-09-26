@@ -317,6 +317,34 @@ def job_review_save(job_id):
                    documentId=saved["document"].get("documentId"))
 
 
+@app.patch("/api/jobs/<job_id>/questions/<key>/text")
+def job_question_text(job_id, key):
+    job = _job_or_404(job_id)
+    if job["status"] != "done":
+        abort(409)
+    body = request.get_json(silent=True)
+    fields = ("stemOverride", "solutionOverride")
+    if not isinstance(body, dict) or not body or any(k not in fields or not isinstance(v, str)
+                                                                  for k, v in body.items()):
+        return jsonify(error="Provide question or solution text as strings"), 400
+    job_dir = JOBS_DIR / job_id
+    doc = review.ensure_current(job_dir)
+    try:
+        ex, q = review.find_question(doc, key)
+    except KeyError:
+        abort(404)
+    saved = review.load_review(job_dir)
+    manual = saved["questions"].get(key, {})
+    auto = review.auto_fields(doc, ex, q, lambda n: f"img:{n}")
+    texts = {field: manual[field] if manual.get(field) is not None else auto[automatic]
+             for field, automatic in (("stemOverride", "stem"), ("solutionOverride", "solutionText"))}
+    changed = {k: v for k, v in body.items() if v != texts[k]}
+    if changed:
+        saved["questions"].setdefault(key, {}).update(changed)
+        review.save_review(job_dir, saved)
+    return jsonify(**{**texts, **body}, workflow=review.workflow_status(job_dir))
+
+
 @app.post("/api/jobs/<job_id>/reread-all")
 def job_reread_all(job_id):
     job = _job_or_404(job_id)

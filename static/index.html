@@ -136,6 +136,11 @@
   .q-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; }
   .q-head h4 { margin: 0; font-size: 17px; }
   .q-head span { color: var(--muted); font-size: 12px; }
+  .preview-editor { width: 100%; min-height: 140px; resize: vertical; padding: 10px; border: 1px solid var(--accent);
+                    border-radius: 7px; background: var(--bg); color: var(--ink); font: 14px/1.5 Consolas, monospace; }
+  .preview-editor:focus { outline: 2px solid var(--accent); }
+  .preview-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 14px; }
+  .preview-actions .hint { margin: 0; }
   .label { font: 700 11px system-ui, sans-serif; text-transform: uppercase; letter-spacing: 1px;
            color: var(--accent); margin: 14px 0 4px; }
   .body .ln { min-height: 1.2em; margin: 3px 0; overflow-x: auto; overflow-y: hidden; }
@@ -356,6 +361,7 @@ function reviewedDocument(saved) {
       byTitle.set(title, exercise); exercises.push(exercise);
     }
     byTitle.get(title).questions.push({
+      key: q.key,
       number: q.manual.questionNumber || q.auto.questionNumber,
       page_start: q.auto.regions?.[0]?.page ?? q.auto.sourceRegion?.page ?? '—',
       question: {reviewText: q.manual.stemOverride ?? q.auto.stem},
@@ -439,10 +445,12 @@ function render() {
       const rc = qs.reviewCount + ss.reviewCount;
       const anchor = `q${ei}_${qi}`;
       navHtml += `<a href="#" data-target="${anchor}" class="${rc ? "has-review" : ""}" title="${rc ? rc + " formula(s) to check" : ""}">${q.number}</a>`;
-      body += `<article class="q" id="${anchor}">
-        <div class="q-head"><h4>Question ${q.number}</h4><span class="ui">page ${q.page_start}${rc ? ` · ${rc} to check` : ""}</span></div>
+      body += `<article class="q" id="${anchor}" ${reviewedPreview ? `data-review-key="${esc(q.key)}"` : ''}>
+        <div class="q-head"><h4>Question ${q.number}</h4><span class="ui">page ${q.page_start}${rc ? ` · ${rc} to check` : ""}
+          ${reviewedPreview ? '<button class="ghost" data-preview-action="edit">✎ Edit</button>' : ''}</span></div>
         <div class="label">Question</div><div class="body">${qs.html}</div>
         <div class="label">Solution</div><div class="body">${ss.html}</div>
+        ${reviewedPreview ? '<div class="preview-actions ui" hidden></div>' : ''}
       </article>`;
     });
     navHtml += `</div>`;
@@ -473,6 +481,63 @@ function render() {
 }
 
 // ---------- formula panel: every formula with its image, result and origin ----------
+$("content").addEventListener('click', async event => {
+  const button = event.target.closest('[data-preview-action]');
+  if (!button || !reviewedPreview) return;
+  const row = button.closest('[data-review-key]');
+  const question = doc.exercises.flatMap(ex => ex.questions).find(q => q.key === row.dataset.reviewKey);
+  if (!question) return;
+  const bodies = row.querySelectorAll('.body'), actions = row.querySelector('.preview-actions');
+  const editButton = row.querySelector('[data-preview-action="edit"]');
+  const keepPosition = change => {
+    const top = row.getBoundingClientRect().top;
+    change();
+    window.scrollBy(0, row.getBoundingClientRect().top - top);
+  };
+  const showText = message => keepPosition(() => {
+    bodies[0].innerHTML = renderReviewedText(question.question.reviewText);
+    bodies[1].innerHTML = renderReviewedText(question.solution.reviewText);
+    editButton.hidden = false;
+    actions.hidden = !message;
+    actions.innerHTML = message ? `<span class="hint" role="status">${esc(message)}</span>` : '';
+  });
+  if (button.dataset.previewAction === 'edit') {
+    keepPosition(() => {
+      bodies[0].innerHTML = `<textarea class="preview-editor" aria-label="Question text">${esc(question.question.reviewText || '')}</textarea>`;
+      bodies[1].innerHTML = `<textarea class="preview-editor" aria-label="Solution text">${esc(question.solution.reviewText || '')}</textarea>`;
+      editButton.hidden = true;
+      actions.hidden = false;
+      actions.innerHTML = `<button data-preview-action="save">Save</button><button class="ghost" data-preview-action="cancel">Cancel</button>
+        <span class="hint">Keep image references to retain pictures. Maths uses \\(…\\) or \\[…\\].</span><span role="status"></span>`;
+    });
+    return;
+  }
+  if (button.dataset.previewAction === 'cancel') { showText(''); return; }
+  const inputs = row.querySelectorAll('.preview-editor');
+  const text = {stemOverride: inputs[0].value, solutionOverride: inputs[1].value};
+  const editingJob = jobId;
+  const buttons = [...actions.querySelectorAll('button')];
+  buttons.forEach(b => b.disabled = true);
+  inputs.forEach(input => input.disabled = true);
+  const status = actions.querySelector('[role="status"]');
+  status.textContent = 'Saving…';
+  try {
+    const response = await fetch(`/api/jobs/${editingJob}/questions/${encodeURIComponent(question.key)}/text`, {
+      method: 'PATCH', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(text)});
+    const saved = await response.json();
+    if (!response.ok) throw new Error(saved.error || response.statusText);
+    question.question.reviewText = saved.stemOverride;
+    question.solution.reviewText = saved.solutionOverride;
+    if (editingJob === jobId && row.isConnected) {
+      showText(saved.workflow?.previouslyFinalized ? 'Saved — final review & bundle required again' : 'Saved to Review');
+    }
+  } catch (error) {
+    status.textContent = 'Could not save: ' + error.message;
+    buttons.forEach(b => b.disabled = false);
+    inputs.forEach(input => input.disabled = false);
+  }
+});
+
 const PANEL_TABS = [
   ["all", "All", v => true],
   ["latex", "As LaTeX", v => !!v.latex && !v.needs_review],
