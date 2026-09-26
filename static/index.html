@@ -45,6 +45,11 @@
   button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); padding: 7px 14px; font-size: 13px; }
   .hint { color: var(--muted); font-size: 13px; margin-top: 10px; }
   .bulkbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; }
+  .job-tabs { display: flex; gap: 6px; margin-top: 26px; border-bottom: 1px solid var(--line); overflow-x: auto; }
+  .job-tabs button { flex: 1; white-space: nowrap; border: 1px solid var(--line); border-bottom: 0;
+                     border-radius: 8px 8px 0 0; background: transparent; color: var(--muted); }
+  .job-tabs button[aria-selected="true"] { background: var(--accent); color: var(--panel); }
+  .job-panel { padding-top: 12px; }
   .error { color: var(--err); font-size: 14px; margin-top: 12px; }
   table.jobs { width: 100%; border-collapse: collapse; font-size: 13px; background: var(--panel);
                border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
@@ -594,6 +599,18 @@ $("content").addEventListener("click", e => {
 });
 
 // ---------- list of everything uploaded so far ----------
+let jobListTab = 'ready';
+function selectJobTab(name) {
+  jobListTab = name;
+  $("jobList").querySelectorAll('[role="tab"]').forEach(button => {
+    const selected = button.dataset.jobTab === name;
+    button.setAttribute('aria-selected', String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  });
+  $("jobList").querySelectorAll('[role="tabpanel"]').forEach(panel => {
+    panel.hidden = panel.id !== `job-panel-${name}`;
+  });
+}
 async function drawJobList() {
   let list;
   try { list = (await (await fetch("/api/jobs")).json()).jobs || []; } catch { return; }
@@ -619,17 +636,39 @@ async function drawJobList() {
         <td class="links">${workflow.stage === 'ready' && mongo.available ? `<button class="ghost" data-push="${j.id}">⬆ Push to database</button> ` : ''}${j.hasResult ? `<a href="#job=${j.id}">Results</a> · <a href="/review#job=${j.id}">Review</a> · ` : ""}${
           canDelete ? `<a class="del" data-del="${j.id}" data-name="${esc(j.filename)}" data-q="${j.questions ?? ""}" title="Delete this PDF and everything extracted from it">Delete</a>` : ""}</td></tr>`;
     }).join("")}</tbody></table>`;
-  $("jobList").innerHTML = `<h3 style="margin:26px 0 8px">Final reviewed & bundled (${ready.length})</h3>
+  $("jobList").innerHTML = `<div class="job-tabs" role="tablist" aria-label="PDF workflow">
+      <button id="job-tab-ready" role="tab" data-job-tab="ready" aria-controls="job-panel-ready">Final reviewed & bundled (${ready.length})</button>
+      <button id="job-tab-pending" role="tab" data-job-tab="pending" aria-controls="job-panel-pending">Uploaded PDFs · Review pending (${pending.length})</button>
+      ${pushed.length ? `<button id="job-tab-pushed" role="tab" data-job-tab="pushed" aria-controls="job-panel-pushed">Pushed to database (${pushed.length})</button>` : ''}
+    </div>
+    <section class="job-panel" id="job-panel-ready" role="tabpanel" aria-labelledby="job-tab-ready">
     <p class="hint" style="margin:8px 0">Next task: Push to database</p>
     ${ready.length ? `${mongo.available ? `<button class="ghost" id="pushAll">⬆ Push ready PDFs to database (${ready.length})</button>`
       : '<p class="hint">Configure MongoDB to push these completed PDFs.</p>'}${table(ready)}`
       : '<p class="hint">Complete Review, then choose “Final review & bundle” to move a PDF here.</p>'}
-    ${pushed.length ? `<h3 style="margin:26px 0 8px">Pushed to database (${pushed.length})</h3>${table(pushed)}` : ''}
-    <h3 style="margin:26px 0 8px;font-size:14px">Uploaded PDFs · Review pending (${pending.length})</h3>
+    </section>
+    ${pushed.length ? `<section class="job-panel" id="job-panel-pushed" role="tabpanel" aria-labelledby="job-tab-pushed">${table(pushed)}</section>` : ''}
+    <section class="job-panel" id="job-panel-pending" role="tabpanel" aria-labelledby="job-tab-pending">
     ${done.length ? `<div class="bulkbar"><button class="ghost" id="bundleAll" title="Save finished chapters in exports/">📦 Bundle all (${done.length})</button></div>` : ''}
-    <div id="bulkState" class="hint" role="status"></div>
     ${pending.length ? table(pending) : '<p class="hint">All uploaded PDFs have been finalized.</p>'}
-    ${busy ? `<div class="hint">${busy} still processing — they run one at a time.</div>` : ""}`;
+    ${busy ? `<div class="hint">${busy} still processing — they run one at a time.</div>` : ""}
+    </section>
+    <div id="bulkState" class="hint" role="status"></div>`;
+  const tabs = [...$("jobList").querySelectorAll('[role="tab"]')];
+  if (!tabs.some(b => b.dataset.jobTab === jobListTab)) jobListTab = 'ready';
+  selectJobTab(jobListTab);
+  tabs.forEach((button, index) => {
+    button.onclick = () => selectJobTab(button.dataset.jobTab);
+    button.onkeydown = event => {
+      const next = event.key === 'ArrowRight' ? (index + 1) % tabs.length
+        : event.key === 'ArrowLeft' ? (index + tabs.length - 1) % tabs.length
+        : event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : null;
+      if (next === null) return;
+      event.preventDefault();
+      selectJobTab(tabs[next].dataset.jobTab);
+      tabs[next].focus();
+    };
+  });
   if ($("bundleAll")) $("bundleAll").onclick = () => bulk(done, false);
   if ($("pushAll")) $("pushAll").onclick = () => bulk(ready, true);
   $("jobList").querySelectorAll('[data-push]').forEach(b => b.onclick = () => bulk(ready.filter(j => j.id === b.dataset.push), true));
