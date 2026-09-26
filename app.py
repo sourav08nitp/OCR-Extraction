@@ -22,6 +22,7 @@ import ai_fallback
 import pdf_to_structured
 import review
 import settings
+from exam_names import normalize_exam
 
 warnings.filterwarnings("ignore")
 
@@ -307,6 +308,8 @@ def job_review_save(job_id):
     doc_in = body.get("document") or {}
     document_id = saved["document"].get("documentId")
     saved["document"] = {k: doc_in[k] for k in review.DOC_FIELDS if k in doc_in}
+    if "exam" in saved["document"]:
+        saved["document"]["exam"] = normalize_exam(saved["document"]["exam"])
     if document_id and not saved["document"].get("documentId"):
         saved["document"]["documentId"] = document_id
     keys = {k for k, _, _ in review.questions(review.ensure_current(job_dir))}

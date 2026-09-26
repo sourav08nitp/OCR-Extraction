@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pdf_to_structured as pts
+from exam_names import normalize_exam
 
 QUESTION_TYPES = ["subjective", "single_correct", "multiple_correct", "integer", "numerical",
                   "match_the_column", "comprehension", "assertion_reason", "true_false", "fill_in_the_blank"]
@@ -140,6 +141,8 @@ def ensure_current(job_dir):
 def load_review(job_dir):
     r = _load(Path(job_dir) / "review.json", {}, required=True)
     r.setdefault("document", {})
+    if "exam" in r["document"]:
+        r["document"]["exam"] = normalize_exam(r["document"]["exam"])
     r.setdefault("questions", {})
     r.setdefault("ids", {})
     r.setdefault("imageIds", {})      # image file name -> stable id, so exports keep the same reference
@@ -428,7 +431,7 @@ def build_record(doc, key, ex, q, review, image_url, now, px_size=None):
         "sectionName": _pick(m, d, a, "sectionName"),
         "topic": _pick(m, d, a, "topic"),
         "subject": d.get("subject") or None,
-        "exam": (d.get("exam") or "").strip() or None,
+        "exam": normalize_exam(d.get("exam")),
         "flagged": bool(m["flagged"]) if m.get("flagged") is not None else a["flagged"],
         "isPyq": bool(is_pyq) if is_pyq is not None else False,
         "pyqExam": _pick(m, d, a, "pyqExam") if is_pyq else None,

@@ -650,8 +650,9 @@ function drawDocument() {
       if (kind === "select") input = selectHtml(f, v, data.options[f].map(o => [o, o]), "— choose —");
       else if (kind === "exam") {
         const exams = ["JEE", "NEET", "BOARDS"];
-        if (v && !exams.includes(v)) exams.push(v);
-        input = selectHtml(f, v, exams.map(exam => [exam, exam]), "— select exam —");
+        const value = ({board: 'BOARDS', boards: 'BOARDS', jee: 'JEE', neet: 'NEET'})[String(v).trim().toLowerCase()] || v;
+        if (value && !exams.includes(value)) exams.push(value);
+        input = selectHtml(f, value, exams.map(exam => [exam, exam]), "— select exam —");
       }
       else if (kind === "pyq") input = selectHtml(f, v === true ? "yes" : v === false ? "no" : "", [["yes", "Yes, all are past-paper questions"], ["no", "No"]], "Detect from the text (e.g. [JEE-2005])");
       else if (kind === "answerFrom") input = selectHtml(f, v, [["answer", "answer (always)"], ["explanation", "explanation (always)"]],

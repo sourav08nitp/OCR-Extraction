@@ -53,6 +53,7 @@ from pathlib import Path
 
 BASE = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(BASE))
+from exam_names import normalize_exam
 try:
     import settings
     settings.load()            # .env in the project root; real environment variables win
@@ -70,6 +71,8 @@ def to_document(record, string_ids=False):
     from bson import ObjectId
 
     doc = dict(record)
+    if "exam" in doc:
+        doc["exam"] = normalize_exam(doc["exam"])
     oid = lambda v: v if string_ids or not isinstance(v, str) or len(v) != 24 else ObjectId(v)
 
     if "id" in doc:
@@ -217,7 +220,7 @@ def push_document(records, database, *, file_name, session_id=None, write=False,
         "questionType": max(set(kinds), key=kinds.count) if kinds else None,
         "sectionName": "All sections",
         "subject": first.get("subject"),
-        "exam": first.get("exam") or None,
+        "exam": normalize_exam(first.get("exam")),
         "pyq": any(r.get("isPyq") for r in records),
         "pyqExam": None,
         "pyqYear": None,

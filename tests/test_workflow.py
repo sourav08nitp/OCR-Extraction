@@ -106,7 +106,7 @@ class WorkflowTests(unittest.TestCase):
         response = self.client.put('/api/jobs/abc123/review', json={
             'document': saved['document'], 'questions': saved['questions']})
         self.assertEqual(response.status_code, 200)
-        self.assertEqual(review.load_review(self.job)['document']['exam'], ' CBSE ')
+        self.assertEqual(review.load_review(self.job)['document']['exam'], 'CBSE')
         records = review.export(self.job)
         self.assertEqual(records[0]['exam'], 'CBSE')
         self.assertFalse(records[0]['isPyq'])
@@ -126,6 +126,23 @@ class WorkflowTests(unittest.TestCase):
         saved['document']['exam'] = ''
         review.save_review(self.job, saved)
         self.assertIsNone(review.export(self.job)[0]['exam'])
+
+    def test_legacy_board_exam_is_normalized(self):
+        from tools import push_mongo
+        from exam_names import normalize_exam
+        for value in ('Board', 'board', 'Boards', ' boards ', 'BOARDS'):
+            self.assertEqual(normalize_exam(value), 'BOARDS')
+        saved = review.load_review(self.job)
+        saved['document']['exam'] = 'Board'
+        review.save_review(self.job, saved)
+        self.assertEqual(review.load_review(self.job)['document']['exam'], 'BOARDS')
+        record = review.export(self.job)[0]
+        self.assertEqual(record['exam'], 'BOARDS')
+        record['exam'] = 'Board'  # an older bundle is normalized during a push too
+        self.assertEqual(push_mongo.to_document(record)['exam'], 'BOARDS')
+        database = MagicMock()
+        push_mongo.push_document([push_mongo.to_document(record)], database, file_name='Test.pdf', write=True)
+        self.assertEqual(database['ingest_documents'].update_one.call_args.args[1]['$set']['exam'], 'BOARDS')
 
     def test_incomplete_flagged_and_empty_exports_cannot_finalize(self):
         for changes in ({'topic': ''}, {'flagged': True}, {'skip': True}):
