@@ -178,6 +178,7 @@ def list_jobs():
             "error": live.get("error"),
             "questions": meta.get("questions"),
             "hasResult": has_result,
+            "workflow": review.workflow_status(d) if has_result else {"stage": "review"},
             "uploadedAt": (d / "input.pdf").stat().st_mtime,
         })
     out.sort(key=lambda j: j["uploadedAt"], reverse=True)
@@ -271,6 +272,7 @@ def _review_payload(job_id):
         name, saved["document"].get("subject"), review.detect_class(job_dir))
     return {
         "document": saved["document"],
+        "workflow": review.workflow_status(job_dir),
         "syllabus": {k: v["topics"] for k, v in syl.items()},
         "syllabusSources": {k: v.get("source") for k, v in syl.items()},
         "suggestedSyllabusChapter": guessed,
@@ -303,12 +305,16 @@ def job_review_save(job_id):
     job_dir = JOBS_DIR / job_id
     saved = review.load_review(job_dir)
     doc_in = body.get("document") or {}
+    document_id = saved["document"].get("documentId")
     saved["document"] = {k: doc_in[k] for k in review.DOC_FIELDS if k in doc_in}
+    if document_id and not saved["document"].get("documentId"):
+        saved["document"]["documentId"] = document_id
     keys = {k for k, _, _ in review.questions(review.ensure_current(job_dir))}
     saved["questions"] = {k: {f: v for f, v in (m or {}).items() if f in review.MANUAL_FIELDS}
                           for k, m in (body.get("questions") or {}).items() if k in keys}
     review.save_review(job_dir, saved)
-    return jsonify(ok=True)
+    return jsonify(ok=True, workflow=review.workflow_status(job_dir),
+                   documentId=saved["document"].get("documentId"))
 
 
 @app.post("/api/jobs/<job_id>/reread-all")
@@ -479,6 +485,21 @@ def job_bundle(job_id):
         return jsonify(error=f"{type(e).__name__}: {e}"[:300]), 500
 
 
+@app.post("/api/jobs/<job_id>/finalize")
+def job_finalize(job_id):
+    job = _job_or_404(job_id)
+    if job["status"] != "done":
+        abort(409)
+    try:
+        return jsonify(workflow=review.finalize_bundle(
+            JOBS_DIR / job_id, review.bundle_name(job.get("filename"), job_id)))
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(error=f"Could not finalize: {e}"[:300]), 500
+
+
 @app.post("/api/jobs/<job_id>/push")
 def job_push(job_id):
     """Bundle this chapter and push it to MongoDB. body: {write: bool, images: "gridfs"|"skip"}."""
@@ -497,6 +518,7 @@ def job_push(job_id):
 
     name = review.bundle_name(job.get("filename"), job_id)
     try:
+        signature = review.review_signature(JOBS_DIR / job_id)
         bundle = review.write_bundle(JOBS_DIR / job_id, name=name)
         client, database = push_mongo.connect(db=cfg["db"])
         try:
@@ -509,8 +531,12 @@ def job_push(job_id):
                 session_id=body.get("sessionId") or os.environ.get("MONGODB_SESSION_ID"))
         finally:
             client.close()
+        workflow = review.workflow_status(JOBS_DIR / job_id)
+        if res.get("wrote") and not res.get("missing") and not bundle["missing"]:
+            workflow = review.mark_pushed(JOBS_DIR / job_id, signature,
+                                          {"db": cfg["db"], "collection": cfg["collection"]})
         return jsonify({**res, "bundle": bundle, "db": cfg["db"], "collection": cfg["collection"],
-                        "chapter": name})
+                        "chapter": name, "workflow": workflow})
     except RuntimeError as e:
         return jsonify(error=str(e)), 400
     except Exception as e:

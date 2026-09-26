@@ -128,6 +128,8 @@
   <button class="ghost" id="rereadBtn" hidden title="Sends every question's highlighted box to the AI and replaces its text. Questions you edited yourself are left alone.">✨ Re-read all with AI</button>
   <button class="ghost" id="zipBtn" title="All images referenced by the export, for uploading to your storage">Images (.zip)</button>
   <button class="ghost" id="bundleBtn" title="Save this chapter's questions.json and its images together in exports/">📦 Bundle</button>
+  <button id="finalizeBtn" title="Sign off this review, create the final bundle and show it on the dashboard">✓ Final review &amp; bundle</button>
+  <span id="workflowState" class="progress" role="status"></span>
   <button class="ghost" id="pushBtn" hidden title="Bundle this chapter and send it to MongoDB">⬆ Push to MongoDB</button>
   <button id="exportBtn">Export JSON</button>
 </header>
@@ -245,6 +247,10 @@ function status(q) {
 // ---------------- saving ----------------
 let saveTimer = null;
 function scheduleSave() {
+  if (data.workflow?.stage === 'ready' || data.workflow?.stage === 'pushed') {
+    data.workflow = {stage: 'review', previouslyFinalized: true};
+    drawWorkflow();
+  }
   $("saveState").textContent = "Saving…";
   clearTimeout(saveTimer);
   saveTimer = setTimeout(save, 700);
@@ -261,6 +267,10 @@ async function save() {
     const r = await fetch(`/api/jobs/${jobId}/review`, { method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ document: data.document, questions }) });
     if (!r.ok) throw new Error(r.statusText);
+    const result = await r.json();
+    data.workflow = result.workflow;
+    if (result.documentId) data.document.documentId = result.documentId;
+    drawWorkflow();
     $("saveState").textContent = "Saved";
     return true;
   } catch (e) { $("saveState").textContent = "Save failed"; toast("Could not save: " + e.message); return false; }
@@ -489,7 +499,31 @@ async function deleteAddedQuestion(key) {
 }
 
 // ---------------- bundle + push to MongoDB ----------------
+function drawWorkflow() {
+  const w = data.workflow || {stage: 'review'};
+  $("workflowState").textContent = w.stage === 'pushed' ? '✓ Final reviewed & bundled · Pushed to database'
+    : w.stage === 'ready' ? '✓ Final reviewed & bundled · Next: Push to database'
+    : w.previouslyFinalized ? 'Changes need final review & bundle again' : 'Next: Final review & bundle';
+  $("finalizeBtn").disabled = w.stage === 'ready' || w.stage === 'pushed';
+}
+$("finalizeBtn").onclick = async () => {
+  stashTextEdit(); clearTimeout(saveTimer);
+  if (!await save()) return;
+  const btn = $("finalizeBtn");
+  btn.disabled = true; btn.textContent = 'Finalizing…';
+  try {
+    const r = await fetch(`/api/jobs/${jobId}/finalize`, {method: 'POST'});
+    const j = await r.json();
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    data.workflow = j.workflow;
+    toast('Final reviewed & bundled — visible on the dashboard. Next: Push to database');
+  } catch (e) { toast(e.message); }
+  btn.textContent = '✓ Final review & bundle';
+  drawWorkflow();
+};
 $("bundleBtn").onclick = async () => {
+  stashTextEdit(); clearTimeout(saveTimer);
+  if (!await save()) return;
   const btn = $("bundleBtn");
   btn.disabled = true; btn.textContent = "Bundling…";
   try {
@@ -511,6 +545,8 @@ async function setUpMongo() {
   const where = cfg.images === "supabase" ? `Supabase bucket "${cfg.bucket}"` : "GridFS";
   btn.title = `Bundle this chapter and send it to ${cfg.db}.${cfg.collection}, images to ${where}`;
   btn.onclick = async () => {
+    stashTextEdit(); clearTimeout(saveTimer);
+    if (!await save()) return;
     btn.disabled = true; btn.textContent = "Checking…";
     try {
       // first pass writes nothing: it reports exactly what would happen, then you confirm
@@ -532,8 +568,10 @@ async function setUpMongo() {
           const j = await r.json(); if (!r.ok) throw new Error(j.error || r.statusText); return j; });
       toast(`Pushed to ${res.db}.${res.collection}: ${res.new} new, ${res.updated} updated, `
             + `${res.imagesStored} image(s) stored`);
+      data.workflow = res.workflow;
+      drawWorkflow();
     } catch (e) { toast("Push failed: " + e.message); }
-    btn.disabled = false; btn.textContent = "⬆ Push to MongoDB";
+    finally { btn.disabled = false; btn.textContent = "⬆ Push to MongoDB"; }
   };
 }
 
@@ -545,6 +583,7 @@ async function reloadReview() {
 
 // ---------------- right side ----------------
 function drawProgress() {
+  drawWorkflow();
   const counts = { done: 0, need: 0, flag: 0, skip: 0 };
   data.questions.forEach(q => counts[status(q)]++);
   $("progress").innerHTML = `<b>${counts.done}</b> of ${data.questions.length - counts.skip} ready · ` +

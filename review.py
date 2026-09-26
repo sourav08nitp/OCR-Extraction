@@ -5,6 +5,7 @@ review screen (saved in jobs/<id>/review.json). Export merges both, manual value
 """
 
 import json
+import hashlib
 import os
 import re
 import threading
@@ -1104,6 +1105,79 @@ def export(job_dir):
 
 
 BUNDLES = Path(__file__).resolve().parent / "exports"
+
+
+def review_signature(job_dir):
+    """Content being signed off; generated export IDs do not count as edits."""
+    job_dir = Path(job_dir)
+    saved = load_review(job_dir)
+    content = {k: saved[k] for k in ("document", "questions", "manualImages", "addedQuestions")}
+    content["document"] = {k: v for k, v in content["document"].items() if k != "documentId"}
+    content["questions"] = {k: v for k, v in content["questions"].items() if v}
+    digest = hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False).encode())
+    digest.update((job_dir / "out" / "structured.json").read_bytes())
+    for path in sorted((job_dir / "out" / "images").glob("*")):
+        if path.is_file():
+            digest.update(path.name.encode())
+            digest.update(path.read_bytes())
+    return digest.hexdigest()
+
+
+def bundle_signature(folder):
+    folder = Path(folder)
+    records = json.loads((folder / "questions.json").read_text(encoding="utf-8"))
+    stable = [{k: v for k, v in r.items() if k not in ("createdAt", "updatedAt")} for r in records]
+    digest = hashlib.sha256(json.dumps(stable, sort_keys=True, ensure_ascii=False).encode())
+    for name in sorted({Path(c["url"]).name for r in records for c in r.get("imageCrops", [])}):
+        digest.update(name.encode())
+        digest.update((folder / "images" / name).read_bytes())
+    return digest.hexdigest()
+
+
+def workflow_status(job_dir):
+    saved = load_review(job_dir).get("workflow") or {}
+    if not saved:
+        return {"stage": "review"}
+    try:
+        current = saved["signature"] == review_signature(job_dir)
+        bundled = saved["bundleSignature"] == bundle_signature(saved["bundle"]["folder"])
+    except (OSError, ValueError, KeyError, TypeError):
+        current = bundled = False
+    if not current or not bundled:
+        return {"stage": "review", "previouslyFinalized": True,
+                "reason": "Content changed or bundle unavailable — final review required"}
+    return {"stage": "pushed" if saved.get("pushedAt") else "ready",
+            **{k: saved[k] for k in ("finalizedAt", "bundle", "pushedAt", "database") if k in saved}}
+
+
+def finalize_bundle(job_dir, name):
+    records = export(job_dir)
+    incomplete = sum(bool(missing_fields(r)) for r in records)
+    flagged = sum(bool(r.get("flagged")) for r in records)
+    if not records or incomplete or flagged:
+        raise ValueError(f"Final review requires ready questions: {incomplete} need input, {flagged} flagged, "
+                         f"{len(records)} included in export")
+    signature = review_signature(job_dir)
+    bundle = write_bundle(job_dir, name=name)
+    if bundle["missing"]:
+        raise ValueError(f"Cannot finalize: {len(bundle['missing'])} image file(s) missing")
+    if signature != review_signature(job_dir):
+        raise ValueError("The document changed while bundling. Please finalize again")
+    saved = load_review(job_dir)
+    saved["workflow"] = {"signature": signature, "bundle": bundle,
+                         "bundleSignature": bundle_signature(bundle["folder"]),
+                         "finalizedAt": datetime.now(timezone.utc).isoformat(timespec="seconds")}
+    save_review(job_dir, saved)
+    return workflow_status(job_dir)
+
+
+def mark_pushed(job_dir, signature, database):
+    saved = load_review(job_dir)
+    if workflow_status(job_dir)["stage"] in ("ready", "pushed") and review_signature(job_dir) == signature:
+        saved["workflow"].update(pushedAt=datetime.now(timezone.utc).isoformat(timespec="seconds"),
+                                 database=database)
+        save_review(job_dir, saved)
+    return workflow_status(job_dir)
 
 
 def bundle_name(pdf_name, job_id):

@@ -597,31 +597,42 @@ $("content").addEventListener("click", e => {
 async function drawJobList() {
   let list;
   try { list = (await (await fetch("/api/jobs")).json()).jobs || []; } catch { return; }
-  if (!list.length) return;
+  if (!list.length) { $("jobList").innerHTML = ''; return; }
   const busy = list.filter(j => j.status === "queued" || j.status === "running").length;
   const done = list.filter(j => j.status === "done" && j.hasResult);
+  const ready = done.filter(j => j.workflow?.stage === 'ready');
+  const pushed = done.filter(j => j.workflow?.stage === 'pushed');
+  const pending = list.filter(j => !ready.includes(j) && !pushed.includes(j));
   const mongo = await mongoConfig();
-  $("jobList").innerHTML = `<h3 style="margin:26px 0 8px;font-size:14px">Uploaded PDFs (${list.length})</h3>
-    ${done.length ? `<div class="bulkbar">
-      <button class="ghost" id="bundleAll" title="Save every finished chapter's questions.json and images together in exports/">📦 Bundle all (${done.length})</button>
-      ${mongo.available ? `<button class="ghost" id="pushAll" title="Bundle every finished chapter and send it to ${esc(mongo.db)}.${esc(mongo.collection)}">⬆ Push all to MongoDB</button>`
-        : `<span class="hint" style="margin:0">Add MONGODB_URI to the .env file and restart the app to push from here</span>`}
-      <span id="bulkState" class="hint" style="margin:0"></span>
-    </div>` : ""}
-    <table class="jobs"><tbody>${list.map(j => {
+  const table = items => `<table class="jobs"><tbody>${items.map(j => {
       const state = j.status === "done" ? (j.questions != null ? `${j.questions} questions` : "done")
         : j.status === "error" ? `<span style="color:var(--err)">failed</span>`
         : j.status === "queued" ? "waiting…"
         : j.status === "running" ? `${esc(j.stage || "working")}${j.total ? ` ${j.done}/${j.total}` : ""}`
         : "—";
       const canDelete = j.status !== "queued" && j.status !== "running";
-      return `<tr><td class="name">${esc(j.filename)}</td><td class="state">${state}</td>
-        <td class="links">${j.hasResult ? `<a href="#job=${j.id}">Results</a> · <a href="/review#job=${j.id}">Review</a> · ` : ""}${
+      const workflow = j.workflow || {};
+      const detail = workflow.stage === 'ready' ? '<br><small>✓ Final reviewed & bundled</small>'
+        : workflow.stage === 'pushed' ? '<br><small>✓ Pushed to database</small>'
+        : workflow.previouslyFinalized ? '<br><small>Changed — finalize again</small>' : '';
+      return `<tr><td class="name">${esc(j.filename)}${detail}</td><td class="state">${state}</td>
+        <td class="links">${workflow.stage === 'ready' && mongo.available ? `<button class="ghost" data-push="${j.id}">⬆ Push to database</button> ` : ''}${j.hasResult ? `<a href="#job=${j.id}">Results</a> · <a href="/review#job=${j.id}">Review</a> · ` : ""}${
           canDelete ? `<a class="del" data-del="${j.id}" data-name="${esc(j.filename)}" data-q="${j.questions ?? ""}" title="Delete this PDF and everything extracted from it">Delete</a>` : ""}</td></tr>`;
-    }).join("")}</tbody></table>
+    }).join("")}</tbody></table>`;
+  $("jobList").innerHTML = `<h3 style="margin:26px 0 8px">Final reviewed & bundled (${ready.length})</h3>
+    <p class="hint" style="margin:8px 0">Next task: Push to database</p>
+    ${ready.length ? `${mongo.available ? `<button class="ghost" id="pushAll">⬆ Push ready PDFs to database (${ready.length})</button>`
+      : '<p class="hint">Configure MongoDB to push these completed PDFs.</p>'}${table(ready)}`
+      : '<p class="hint">Complete Review, then choose “Final review & bundle” to move a PDF here.</p>'}
+    ${pushed.length ? `<h3 style="margin:26px 0 8px">Pushed to database (${pushed.length})</h3>${table(pushed)}` : ''}
+    <h3 style="margin:26px 0 8px;font-size:14px">Uploaded PDFs · Review pending (${pending.length})</h3>
+    ${done.length ? `<div class="bulkbar"><button class="ghost" id="bundleAll" title="Save finished chapters in exports/">📦 Bundle all (${done.length})</button></div>` : ''}
+    <div id="bulkState" class="hint" role="status"></div>
+    ${pending.length ? table(pending) : '<p class="hint">All uploaded PDFs have been finalized.</p>'}
     ${busy ? `<div class="hint">${busy} still processing — they run one at a time.</div>` : ""}`;
   if ($("bundleAll")) $("bundleAll").onclick = () => bulk(done, false);
-  if ($("pushAll")) $("pushAll").onclick = () => bulk(done, true);
+  if ($("pushAll")) $("pushAll").onclick = () => bulk(ready, true);
+  $("jobList").querySelectorAll('[data-push]').forEach(b => b.onclick = () => bulk(ready.filter(j => j.id === b.dataset.push), true));
   $("jobList").querySelectorAll("a[data-del]").forEach(a => a.onclick = () => deleteJob(a.dataset));
   clearTimeout(window._jobTimer);
   if (busy && !window._bulkRunning) window._jobTimer = setTimeout(drawJobList, 4000);
@@ -660,7 +671,7 @@ async function bulk(jobs, push) {
   }
   window._bulkRunning = true;
   clearTimeout(window._jobTimer);
-  const btns = [$("bundleAll"), $("pushAll")].filter(Boolean);
+  const btns = [...$("jobList").querySelectorAll('button')];
   btns.forEach(b => b.disabled = true);
   const state = $("bulkState");
   let q = 0, imgs = 0, failed = [];
@@ -675,14 +686,17 @@ async function bulk(jobs, push) {
       const r = await fetch(url, opts);
       const res = await r.json();
       if (!r.ok) throw new Error(res.error || r.statusText);
+      if (push && res.missing?.length) throw new Error(`${res.missing.length} image(s) missing — check the bundle before considering this complete`);
       q += res.questions || 0;
       imgs += push ? (res.imagesStored || 0) : (res.images || 0);
     } catch (e) { failed.push(`${j.filename}: ${e.message}`); }
   }
   window._bulkRunning = false;
   btns.forEach(b => b.disabled = false);
-  state.textContent = `${push ? "Pushed" : "Bundled"} ${jobs.length - failed.length}/${jobs.length}`
+  const message = `${push ? "Pushed" : "Bundled"} ${jobs.length - failed.length}/${jobs.length}`
     + ` — ${q} question(s), ${imgs} image(s)` + (failed.length ? ` · ${failed.length} failed` : "");
+  await drawJobList();
+  $("bulkState").textContent = message;
   if (failed.length) console.warn("Failed chapters:\n" + failed.join("\n"));
 }
 // A Results link changes only the hash, so handle it without requiring a page reload.
