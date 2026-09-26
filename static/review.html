@@ -714,7 +714,6 @@ function questionBody(q) {
 
 function openQuestion(key) {
   if (editKey && editKey !== key) { stashTextEdit(); editKey = null; }
-  if (visiblePageQuestions().filter(q => expandedKeys.has(q.key)).length <= 1) expandedKeys.delete(openKey);
   openKey = key;
   expandedKeys.add(key);
   const q = data.questions.find(x => x.key === key);
@@ -934,6 +933,7 @@ $("rereadBtn").onclick = async () => {
     if (!r.ok) throw new Error(r.status === 409 ? "this job has not finished yet" : r.statusText);
     data = await r.json();
   } catch (e) { $("sideBody").innerHTML = `<div class="empty">Could not load: ${esc(e.message)}</div>`; return; }
+  data.questions.forEach(q => expandedKeys.add(q.key));
   $("title").textContent = "Review & export" + (data.document.chapter || data.suggested.chapter ? " — " + (data.document.chapter || data.suggested.chapter) : "");
   $("saveState").textContent = "";
   $("rereadBtn").hidden = $("topicsBtn").hidden = $("addQBtn").hidden = !data.aiAvailable;
