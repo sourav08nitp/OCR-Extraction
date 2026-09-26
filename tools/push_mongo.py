@@ -43,6 +43,7 @@ it instead of uploading again, and every reference is rewritten - `images`, `que
 """
 
 import argparse
+import copy
 import hashlib
 import json
 import os
@@ -61,7 +62,7 @@ except ImportError:
     pass
 
 DATE_FIELDS = ("createdAt", "updatedAt")
-URL_FIELDS = ("images", "optionImages")   # the document fields that are lists of image URLs
+URL_FIELDS = ("images", "optionImages", "answerImages", "explanationImages")
 IMG_IN_TEXT = re.compile(r"!\[\]\(([^)\s]+)\)")
 TEXT_FIELDS = ("stem", "answer", "explanation")
 
@@ -70,7 +71,15 @@ def to_document(record, string_ids=False):
     """One exported question -> one MongoDB document."""
     from bson import ObjectId
 
-    doc = dict(record)
+    doc = copy.deepcopy(record)
+    # Older bundles stored solution figures only in imageCrops. Preserve them on re-push.
+    for field, types in (("answerImages", {"answer"}),
+                         ("explanationImages", {"solution", "explanation"})):
+        doc.setdefault(field, list(dict.fromkeys(c["url"] for c in doc.get("imageCrops") or []
+                                                 if c.get("type") in types and c.get("url"))))
+    for crop in doc.get("imageCrops") or []:
+        if crop.get("type") == "explanation":
+            crop["type"] = "solution"
     if "exam" in doc:
         doc["exam"] = normalize_exam(doc["exam"])
     oid = lambda v: v if string_ids or not isinstance(v, str) or len(v) != 24 else ObjectId(v)

@@ -144,6 +144,84 @@ class WorkflowTests(unittest.TestCase):
         push_mongo.push_document([push_mongo.to_document(record)], database, file_name='Test.pdf', write=True)
         self.assertEqual(database['ingest_documents'].update_one.call_args.args[1]['$set']['exam'], 'BOARDS')
 
+    def image_fixture(self):
+        from PIL import Image
+        saved = review.load_review(self.job)
+        saved['manualImages'] = {name: {'page': 1, 'bbox': [0, 0, 100, 100]}
+                                 for name in ('question.png', 'working.png')}
+        saved['questions'] = {'0-0': {'stemOverride': 'Question\n![](img:question.png)',
+                                    'solutionOverride': 'Working\n![](img:working.png)'}}
+        review.save_review(self.job, saved)
+        for name in saved['manualImages']:
+            Image.new('RGB', (10, 10), 'white').save(self.job / 'out' / 'images' / name)
+
+    def test_answer_and_explanation_images_follow_text_destination(self):
+        self.image_fixture()
+        for destination, field, crop_type in (('explanation', 'explanationImages', 'solution'),
+                                              ('answer', 'answerImages', 'answer')):
+            saved = review.load_review(self.job)
+            saved['document']['answerFrom'] = destination
+            review.save_review(self.job, saved)
+            record = review.export(self.job)[0]
+            self.assertEqual(record[field], ['images/working.png'])
+            other = 'answerImages' if field == 'explanationImages' else 'explanationImages'
+            self.assertEqual(record[other], [])
+            self.assertEqual(record['questionImage'], 'images/question.png')
+            self.assertEqual({c['url']: c['type'] for c in record['imageCrops']},
+                             {'images/question.png': 'question', 'images/working.png': crop_type})
+        for heading, field in (('answer', 'answerImages'), ('solution', 'explanationImages')):
+            path = self.job / 'out' / 'structured.json'
+            doc = json.loads(path.read_text(encoding='utf-8'))
+            doc['exercises'][0]['questions'][0]['solution_heading'] = heading
+            path.write_text(json.dumps(doc), encoding='utf-8')
+            saved = review.load_review(self.job)
+            saved['document']['answerFrom'] = 'auto'
+            review.save_review(self.job, saved)
+            self.assertEqual(review.export(self.job)[0][field], ['images/working.png'])
+
+    def test_supabase_rewrites_solution_images_and_reuses_upload_names(self):
+        from tools import push_mongo
+        self.image_fixture()
+        bundle = review.write_bundle(self.job, name='Test')
+        self.assertEqual(bundle['images'], 2)
+        records = json.loads(Path(bundle['folder'], 'questions.json').read_text(encoding='utf-8'))
+        qid = records[0]['id']
+        database = MagicMock()
+        database['ingest_extracted_questions'].bulk_write.return_value = Mock(upserted_count=1, modified_count=0)
+        with patch('supabase_store.public_url', side_effect=lambda n: 'https://storage.example/images/' + n), \
+                patch('supabase_store.upload', return_value='stored') as upload:
+            res = push_mongo.push_records(records, Path(bundle['folder'], 'images'), database=database,
+                                          collection='ingest_extracted_questions', write=True, images='supabase')
+            names = [call.args[1] for call in upload.call_args_list]
+            self.assertEqual(res['imagesStored'], 2)
+            sent = database['ingest_extracted_questions'].bulk_write.call_args.args[0][0]._doc['$set']
+            self.assertTrue(sent['explanationImages'][0].startswith('https://storage.example/'))
+            self.assertEqual(sent['answerImages'], [])
+            self.assertIn(sent['explanationImages'][0], sent['images'])
+            self.assertIn(sent['explanationImages'][0], [c['url'] for c in sent['imageCrops']])
+            self.assertEqual(records[0]['explanationImages'], ['images/working.png'])
+            upload.reset_mock()
+            upload.return_value = 'exists'
+            again = push_mongo.push_records(records, Path(bundle['folder'], 'images'), database=database,
+                                            collection='ingest_extracted_questions', write=True, images='supabase')
+            self.assertEqual(again['imagesReused'], 2)
+            self.assertEqual(names, [call.args[1] for call in upload.call_args_list])
+            self.assertEqual(str(sent['_id']), qid)
+        old = dict(records[0])
+        old.pop('answerImages'); old.pop('explanationImages')
+        old['imageCrops'] = [dict(c, type='explanation') if c['type'] == 'solution' else dict(c)
+                             for c in old['imageCrops']]
+        mapped = push_mongo.to_document(old)
+        self.assertEqual(mapped['explanationImages'], ['images/working.png'])
+        self.assertEqual(mapped['imageCrops'][1]['type'], 'solution')
+        self.assertEqual(old['imageCrops'][1]['type'], 'explanation')
+        saved = review.load_review(self.job)
+        saved['document']['answerFrom'] = 'answer'
+        review.save_review(self.job, saved)
+        record = review.export(self.job)[0]
+        push_mongo.rewrite_urls(record, {'images/working.png': 'https://storage.example/answer.png'})
+        self.assertEqual(record['answerImages'], ['https://storage.example/answer.png'])
+
     def test_incomplete_flagged_and_empty_exports_cannot_finalize(self):
         for changes in ({'topic': ''}, {'flagged': True}, {'skip': True}):
             saved = review.load_review(self.job)

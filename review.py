@@ -365,9 +365,8 @@ def build_record(doc, key, ex, q, review, image_url, now, px_size=None):
             crops.append({"file": name, "url": image_url(name), "page": box["page"],
                           "bbox": _norm_bbox(box["bbox"], sizes[box["page"]]) if box["page"] in sizes else [0, 0, 1, 1],
                           "kind": "cropped by hand"})
-    # the question bank has no separate field for answer images, so they join `images` alongside the
-    # question's own, told apart by the `type` on each imageCrops entry
-    if answer_from == "answer" or (answer_from == "auto" and heading == "answer"):
+    solution_is_answer = answer_from == "answer" or (answer_from == "auto" and heading == "answer")
+    if solution_is_answer:
         answer, explanation = sol or None, None
     else:
         answer, explanation = None, sol or None
@@ -384,15 +383,15 @@ def build_record(doc, key, ex, q, review, image_url, now, px_size=None):
         if picked:
             explanation = explanation or answer or None
             answer = picked
+            # The parsed choice label is the answer; figures in the working belong to explanation.
+            solution_is_answer = False
 
-    # one imageCrops entry per picture, in the bank's shape; `images` carries the same URLs
-    # "explanation" marks a picture that belongs to the worked solution rather than the question.
-    # The collection has no other home for one - it has never stored a solution image - so this is a
-    # type value the reading app has to know about. Object names stay in the bucket's own vocabulary.
+    # Ingest uses "answer" and "solution" crop types and distinct URL lists for those parts.
+    solution_kind = "answer" if solution_is_answer else "solution"
     bank_crops = []
     for c in crops:
         bank_crops.append({"url": c["url"],
-                           "type": "explanation" if c["url"] in expl_imgs else "question",
+                           "type": "question" if c["url"] in stem_imgs else solution_kind,
                            "optionIndex": 0,
                            **_crop_px(c, sizes, px_size(c["file"]) if px_size else None)})
 
@@ -425,6 +424,8 @@ def build_record(doc, key, ex, q, review, image_url, now, px_size=None):
         "questionImage": (stem_imgs or [None])[0],
         "isOptionImage": False,
         "optionImages": [],
+        "answerImages": list(dict.fromkeys(expl_imgs)) if solution_is_answer else [],
+        "explanationImages": [] if solution_is_answer else list(dict.fromkeys(expl_imgs)),
         "imageCrops": bank_crops,
         "questionType": qtype,
         "level": _pick(m, d, a, "level"),
@@ -1116,6 +1117,8 @@ def review_signature(job_dir):
     job_dir = Path(job_dir)
     saved = load_review(job_dir)
     content = {k: saved[k] for k in ("document", "questions", "manualImages", "addedQuestions")}
+    # A prior bundle must be rebuilt when the exported database shape changes.
+    content["exportSchemaVersion"] = 2
     content["document"] = {k: v for k, v in content["document"].items() if k != "documentId"}
     content["questions"] = {k: v for k, v in content["questions"].items() if v}
     digest = hashlib.sha256(json.dumps(content, sort_keys=True, ensure_ascii=False).encode())
