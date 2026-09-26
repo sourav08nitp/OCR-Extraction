@@ -45,8 +45,9 @@
   button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); padding: 7px 14px; font-size: 13px; }
   .hint { color: var(--muted); font-size: 13px; margin-top: 10px; }
   .bulkbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin: 0 0 10px; }
-  .job-tabs { display: flex; gap: 6px; margin-top: 26px; border-bottom: 1px solid var(--line); overflow-x: auto; }
-  .job-tabs button { flex: 1; white-space: nowrap; border: 1px solid var(--line); border-bottom: 0;
+  .job-tabs { display: flex; gap: 6px; margin-top: 26px; border-bottom: 1px solid var(--line); }
+  .job-tabs button { flex: 1 1 0; min-width: 0; white-space: normal; overflow-wrap: anywhere;
+                     padding: 10px 8px; line-height: 1.4; border: 1px solid var(--line); border-bottom: 0;
                      border-radius: 8px 8px 0 0; background: transparent; color: var(--muted); }
   .job-tabs button[aria-selected="true"] { background: var(--accent); color: var(--panel); }
   .job-panel { padding-top: 12px; }
