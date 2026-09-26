@@ -128,6 +128,7 @@
   <button class="ghost" id="topicsBtn" hidden title="Asks the AI to give every question a topic (from the chapter's list) and a difficulty level">🏷 Fill topics &amp; levels with AI</button>
   <button class="ghost" id="rereadBtn" hidden title="Sends every question's highlighted box to the AI and replaces its text. Questions you edited yourself are left alone.">✨ Re-read all with AI</button>
   <button class="ghost" id="zipBtn" title="All images referenced by the export, for uploading to your storage">Images (.zip)</button>
+  <button class="ghost" id="previewBtn" title="Show your saved review in the Results layout">Preview reviewed result</button>
   <button class="ghost" id="bundleBtn" title="Save this chapter's questions.json and its images together in exports/">📦 Bundle</button>
   <button id="finalizeBtn" title="Sign off this review, create the final bundle and show it on the dashboard">✓ Final review &amp; bundle</button>
   <span id="workflowState" class="progress" role="status"></span>
@@ -921,6 +922,11 @@ async function questionAction(btn) {
 document.querySelectorAll(".tab").forEach(t => t.onclick = () => { stashTextEdit(); tab = t.dataset.tab; draw(); });
 
 // ---------------- export ----------------
+$("previewBtn").onclick = async () => {
+  stashTextEdit(); clearTimeout(saveTimer);
+  if (!await save()) return;
+  location.href = `/#job=${jobId}&preview=review`;
+};
 $("exportBtn").onclick = async () => {
   await save();
   const counts = drawProgress();

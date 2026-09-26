@@ -213,7 +213,7 @@
 
 <script>
 const $ = id => document.getElementById(id);
-let chosen = [], jobId = null, doc = null;
+let chosen = [], jobId = null, doc = null, reviewedPreview = false;
 
 // ---------- upload (one or many PDFs) ----------
 const drop = $("drop"), fileInput = $("file");
@@ -331,10 +331,12 @@ function addRestart(where) {
 
 // ---------- results ----------
 async function loadResult(id) {
-  const r = await fetch(`/api/jobs/${id}/result`);
+  const preview = reviewedPreview;
+  const r = await fetch(`/api/jobs/${id}/${preview ? 'review' : 'result'}`);
+  if (!r.ok) throw new Error('Could not load ' + (preview ? 'reviewed preview' : 'results'));
   const result = await r.json();
-  if (id !== jobId) return;
-  doc = result;
+  if (id !== jobId || preview !== reviewedPreview) return;
+  doc = preview ? reviewedDocument(result) : result;
   $("progress").style.display = "none";
   $("result").style.display = "block";
   render();
@@ -343,7 +345,45 @@ async function loadResult(id) {
 const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const imgUrl = name => `/api/jobs/${jobId}/images/${encodeURIComponent(name)}`;
 
+function reviewedDocument(saved) {
+  const exercises = [], byTitle = new Map();
+  let skipped = 0;
+  for (const q of saved.questions) {
+    if (q.manual.skip) { skipped++; continue; }
+    const title = q.auto.exercise;
+    if (!byTitle.has(title)) {
+      const exercise = {title, questions: []};
+      byTitle.set(title, exercise); exercises.push(exercise);
+    }
+    byTitle.get(title).questions.push({
+      number: q.manual.questionNumber || q.auto.questionNumber,
+      page_start: q.auto.regions?.[0]?.page ?? q.auto.sourceRegion?.page ?? '—',
+      question: {reviewText: q.manual.stemOverride ?? q.auto.stem},
+      solution: {reviewText: q.manual.solutionOverride ?? q.auto.solutionText}
+    });
+  }
+  return {exercises, skipped};
+}
+
+function renderReviewedText(text) {
+  return (text || '').split(/(!\[\]\([^)]+\)|\\\([\s\S]+?\\\)|\\\[[\s\S]+?\\\]|\$[^$]+\$)/g).map(part => {
+    const math = part.match(/^\\\(([\s\S]+)\\\)$|^\\\[([\s\S]+)\\\]$|^\$([\s\S]+)\$$/);
+    if (math) {
+      try { return katex.renderToString(math[1] ?? math[2] ?? math[3], {
+        throwOnError: true, strict: 'ignore', displayMode: part.startsWith('\\[')}); }
+      catch { return `<code>${esc(part)}</code>`; }
+    }
+    const image = part.match(/^!\[\]\(([^)]+)\)$/);
+    if (image) {
+      const url = image[1].startsWith('img:') ? imgUrl(image[1].slice(4)) : image[1];
+      return `<img class="eq-img" src="${esc(url)}" alt="Reviewed image" loading="lazy">`;
+    }
+    return esc(part).replace(/\n/g, '<br>');
+  }).join('');
+}
+
 function renderSection(sec) {
+  if (sec.reviewText !== undefined) return {html: renderReviewedText(sec.reviewText), reviewCount: 0};
   const eqs = sec.equations_latex || null;
   let reviewCount = 0;
   const lines = sec.text.split("\n").map(line => {
@@ -409,6 +449,7 @@ function render() {
   });
 
   $("stats").innerHTML = `
+    ${reviewedPreview ? '<span class="chip"><b>Reviewed preview</b> · Saved Review content</span>' : ''}
     <span class="chip"><b>${doc.exercises.length}</b> exercises</span>
     <span class="chip"><b>${nQ}</b> questions</span>
     ${hasImages ? `
@@ -417,10 +458,11 @@ function render() {
       ${figures ? `<button class="chip link" data-tab="figure"><b>${figures}</b> figures</button>` : ""}
       ${byAi ? `<button class="chip link" data-tab="ai"><b>${byAi}</b> by AI</button>` : ""}
       <button class="chip link warn" data-tab="review"><b>${review}</b> to check</button>
-      ${review && aiConfig.ai_available ? `<button class="ghost" id="aiFix">Fix ${review} with AI</button>` : ""}` : `<span class="chip">No extracted images</span>`}
+      ${review && aiConfig.ai_available ? `<button class="ghost" id="aiFix">Fix ${review} with AI</button>` : ""}` : reviewedPreview ? (doc.skipped ? `<span class="chip">${doc.skipped} skipped from export</span>` : '') : `<span class="chip">No extracted images</span>`}
     <span class="spacer"></span>
     <a class="chip" href="/review#job=${jobId}" style="background:var(--accent);color:var(--panel);border-color:var(--accent)">Review &amp; export &rarr;</a>
-    <a class="chip" href="/api/jobs/${jobId}/result" download="structured.json">Raw JSON</a>
+    ${reviewedPreview ? `<a class="chip" href="/api/jobs/${jobId}/export" download="reviewed-questions.json">Export reviewed JSON</a>
+      <a class="chip" href="#job=${jobId}">Original Results</a>` : `<a class="chip" href="/api/jobs/${jobId}/result" download="structured.json">Raw JSON</a>`}
     <button class="ghost" id="again">Upload another PDF</button>`;
   $("again").onclick = () => { location.hash = ""; location.reload(); };
   $("nav").innerHTML = navHtml;
@@ -740,7 +782,8 @@ async function bulk(jobs, push) {
 }
 // A Results link changes only the hash, so handle it without requiring a page reload.
 function showLocation() {
-  const m = location.hash.match(/^#job=([a-f0-9]+)$/);
+  const m = location.hash.match(/^#job=([a-f0-9]+)(&preview=review)?$/);
+  reviewedPreview = !!m?.[2];
   if (m) {
     jobId = m[1];
     showProgress();
