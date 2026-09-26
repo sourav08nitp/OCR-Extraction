@@ -160,7 +160,8 @@
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const jobId = (location.hash.match(/job=([a-f0-9]+)/) || [])[1];
-let data = null, tab = "questions", filter = "all", openKey = null, expandAll = false;
+let data = null, tab = "questions", filter = "all", openKey = null;
+const expandedKeys = new Set();
 
 // ---------------- helpers ----------------
 function toast(msg) { const t = $("toast"); t.textContent = msg; t.style.display = "block"; clearTimeout(t._h); t._h = setTimeout(() => t.style.display = "none", 2600); }
@@ -268,11 +269,13 @@ async function save() {
 pdfjsLib.GlobalWorkerOptions.workerSrc = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
 let pdf = null, pageNo = 1, zoom = 1, renderTask = null, highlights = [], pageRenderSeq = 0;
 
-function onPage(q, page = pageNo) {
-  return [...(q.auto.regions || []), ...(q.auto.lineRegions || []), ...(q.auto.sourceRegion ? [q.auto.sourceRegion] : [])]
-    .some(r => r.page === page);
+function questionStartPage(q) {
+  return q.auto.regions?.[0]?.page ?? q.auto.sourceRegion?.page ?? q.auto.lineRegions?.[0]?.page;
 }
-function pageQuestions() { return data.questions.filter(q => onPage(q)); }
+function pageQuestions() { return data.questions.filter(q => questionStartPage(q) === pageNo); }
+function visiblePageQuestions() {
+  return pageQuestions().filter(q => filter === 'all' || status(q) === filter || q.key === openKey);
+}
 function adjacentQuestion(key, direction) {
   const list = data.questions.filter(q => filter === 'all' || status(q) === filter || q.key === key);
   const index = list.findIndex(q => q.key === key);
@@ -300,8 +303,8 @@ async function showPage(n, regions) {
   if (changed) {
     stashTextEdit();
     pageNo = next;
-    if (!data.questions.some(q => q.key === openKey && onPage(q))) openKey = null;
-    if (!data.questions.some(q => q.key === editKey && onPage(q))) editKey = null;
+    if (!data.questions.some(q => q.key === openKey && questionStartPage(q) === pageNo)) openKey = null;
+    if (!data.questions.some(q => q.key === editKey && questionStartPage(q) === pageNo)) editKey = null;
     highlights = [];
     if (tab === 'questions') {
       drawQuestions({ revealKey: openKey });
@@ -423,6 +426,7 @@ async function addQuestionFromBox(bbox) {
     if (!r.ok) throw new Error(j.error || r.statusText);
     await reloadReview();
     openKey = j.key;          // open it straight away so the AI's reading can be checked
+    expandedKeys.add(j.key);
     drawQuestions();
     document.querySelector(`.qrow[data-key="${CSS.escape(j.key)}"]`)?.scrollIntoView({ block: "center" });
     toast(j.stem ? `Added as question ${j.number} — check the text` : "Added, but the AI read no text in that box");
@@ -623,11 +627,12 @@ function drawQuestions({ anchorKey = null, revealKey = null } = {}) {
   const anchorTop = anchorSelector ? side.querySelector(anchorSelector)?.getBoundingClientRect().top : null;
   drawProgress();
   const scoped = pageQuestions(), counts = {need:0, flag:0, done:0};
+  const list = visiblePageQuestions();
+  const allExpanded = list.length > 0 && list.every(q => expandedKeys.has(q.key));
   scoped.forEach(q => { const s = status(q); if (s in counts) counts[s]++; });
   const F = [["all", "All", scoped.length], ["need", "Needs input", counts.need], ["flag", "Flagged", counts.flag], ["done", "Ready", counts.done]];
   let html = `<div class="page-summary">Page ${pageNo} · ${scoped.length} question${scoped.length === 1 ? '' : 's'}</div><div class="filters">${F.map(([id, l, n]) => `<button data-filter="${id}" class="${filter === id ? "on" : ""}">${l} ${n}</button>`).join("")}
-    <button data-expand="1" class="${expandAll ? "on" : ""}" title="Show every question's details at once">${expandAll ? "Collapse all" : "Expand all"}</button></div>`;
-  const list = scoped.filter(q => filter === "all" || status(q) === filter || q.key === openKey);
+    <button data-expand="1" class="${allExpanded ? "on" : ""}" ${list.length ? '' : 'disabled'} title="Expand or collapse questions on this page">${allExpanded ? "Collapse all" : "Expand all"}</button></div>`;
   if (!list.length) html += `<div class="empty">No matching questions on page ${pageNo}. Use the PDF page arrows to continue.</div>`;
   for (const q of list) {
     const st = status(q), a = q.auto;
@@ -636,7 +641,7 @@ function drawQuestions({ anchorKey = null, revealKey = null } = {}) {
     html += `<div class="qrow ${openKey === q.key ? "sel" : ""}" data-key="${q.key}">
       <div class="qhead"><span class="dot ${st}"></span><span class="num">Q ${esc(a.label)}</span>
         <span class="snip">${esc(snip)}</span><span class="chip">p.${a.regions[0]?.page ?? "?"}</span></div>
-      ${expandAll || openKey === q.key ? questionBody(q) : ""}
+      ${expandedKeys.has(q.key) ? questionBody(q) : ""}
     </div>`;
   }
   side.innerHTML = html;
@@ -707,25 +712,34 @@ function questionBody(q) {
   </div>`;
 }
 
-function openQuestion(key, { fromStart = false } = {}) {
+function openQuestion(key) {
   if (editKey && editKey !== key) { stashTextEdit(); editKey = null; }
+  if (visiblePageQuestions().filter(q => expandedKeys.has(q.key)).length <= 1) expandedKeys.delete(openKey);
   openKey = key;
+  expandedKeys.add(key);
   const q = data.questions.find(x => x.key === key);
   drawQuestions({ revealKey: key });
   // highlight each line rather than one big box: figures often sit in a column beside the text
   const regions = q && (q.auto.lineRegions?.length ? q.auto.lineRegions : q.auto.regions?.length ? q.auto.regions : q.auto.sourceRegion ? [q.auto.sourceRegion] : []);
-  if (regions?.length) showPage(!fromStart && onPage(q) ? pageNo : (q.auto.regions[0]?.page ?? regions[0].page), regions);
+  if (regions?.length) showPage(questionStartPage(q) ?? regions[0].page, regions);
 }
 
 $("sideBody").addEventListener("click", e => {
   const fb = e.target.closest("[data-filter]");
   if (fb) { stashTextEdit(); filter = fb.dataset.filter; drawQuestions(); return; }
-  if (e.target.closest("[data-expand]")) { stashTextEdit(); expandAll = !expandAll; drawQuestions(); return; }
+  if (e.target.closest("[data-expand]")) {
+    stashTextEdit();
+    const list = visiblePageQuestions(), collapse = list.every(q => expandedKeys.has(q.key));
+    for (const q of list) { if (collapse) expandedKeys.delete(q.key); else expandedKeys.add(q.key); }
+    if (collapse) editKey = null;
+    drawQuestions();
+    return;
+  }
   const nav = e.target.closest("[data-nav]");
   if (nav) {
     const key = nav.closest('.qrow')?.dataset.key;
     const target = adjacentQuestion(key, Number(nav.dataset.nav));
-    if (target) openQuestion(target.key, { fromStart: true });
+    if (target) openQuestion(target.key);
     return;
   }
   const act = e.target.closest("[data-act]");
@@ -747,7 +761,12 @@ $("sideBody").addEventListener("click", e => {
   const head = e.target.closest(".qhead");
   if (head) {
     const key = head.parentElement.dataset.key;
-    if (openKey === key && !expandAll) { stashTextEdit(); editKey = null; openKey = null; drawQuestions(); } else openQuestion(key);
+    if (expandedKeys.has(key)) {
+      stashTextEdit();
+      if (editKey === key) editKey = null;
+      expandedKeys.delete(key);
+      drawQuestions();
+    } else openQuestion(key);
   }
 });
 
