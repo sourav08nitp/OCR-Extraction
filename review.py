@@ -22,7 +22,7 @@ LEVELS = ["easy", "medium", "hard"]
 
 # per-question fields a person can set; "" / None means "use the document default or the automatic value"
 MANUAL_FIELDS = ["topic", "level", "questionType", "sectionName", "isPyq", "pyqExam", "pyqYear", "paper",
-                 "flagged", "skip", "stemOverride", "solutionOverride", "aiReread", "questionNumber"]
+                 "flagged", "skip", "stemOverride", "solutionOverride", "aiReread", "questionNumber", "imageReadings"]
 # edited text refers to images as ![](img:NAME); they become real URLs on screen and in the export
 IMG_REF = re.compile(r"!\[\]\(img:([^)\s]+)\)")
 # document-level settings shown on the Document tab
@@ -1008,6 +1008,52 @@ def extract_region(job_dir, key, part, page, bbox_norm):
     manual[field] = text
     save_review(job_dir, saved)
     return {"field": field, "text": manual[field], "katexErrors": result["katexErrors"], "missingFigures": missing_figures}
+
+
+def transcribe_question_image(job_dir, key, part, name):
+    """Replace just one image occurrence, retaining the crop and its PDF location."""
+    import ai_fallback
+
+    if part not in ("stem", "sol") or not isinstance(name, str) or Path(name).name != name or not name.endswith(".png"):
+        raise ValueError("Choose a valid question or answer image")
+    job_dir = Path(job_dir)
+    doc = ensure_current(job_dir)
+    ex, q = find_question(doc, key)
+    field = "stemOverride" if part == "stem" else "solutionOverride"
+    auto = auto_fields(doc, ex, q, lambda n: f"img:{n}")
+    automatic = "stem" if part == "stem" else "solutionText"
+    token = f"![](img:{name})"
+    saved = load_review(job_dir)
+    original = saved["questions"].get(key, {}).get(field)
+    original = auto[automatic] if original is None else original
+    if token not in original:
+        raise ValueError("This image is no longer in the selected question part")
+    path = job_dir / "out" / "images" / name
+    if not path.is_file():
+        raise ValueError("The source image is missing")
+    result = ai_fallback.transcribe_region(path.read_bytes(), part=part)
+    text = "\n".join(t.strip() for t in (result["question"], result["solution"]) if t.strip())
+    if not text or "[[FIGURE]]" in text:
+        raise ValueError("AI could not convert this picture to text; the image was kept")
+    if result["katexErrors"]:
+        raise ValueError("AI returned invalid maths; the image was kept. Try again")
+    text = to_paren_delims(text)
+    saved = load_review(job_dir)
+    manual = saved["questions"].setdefault(key, {})
+    current = manual.get(field)
+    current = auto[automatic] if current is None else current
+    if current != original:
+        raise ValueError("The question changed while AI was reading; try again")
+    manual[field] = current.replace(token, text, 1)
+    box = {**doc.get("image_boxes", {}), **saved["manualImages"]}.get(name, {})
+    page = box.get("page")
+    size = doc.get("page_sizes", {}).get(str(page)) or doc.get("page_sizes", {}).get(page)
+    reading = {"name": name, "part": "question" if part == "stem" else "solution", "text": text,
+               "page": page, "bbox": _norm_bbox(box["bbox"], size) if size and box.get("bbox") else None}
+    readings = [r for r in manual.get("imageReadings", []) if (r.get("name"), r.get("part")) != (name, reading["part"])]
+    manual["imageReadings"] = readings + [reading]
+    save_review(job_dir, saved)
+    return {"field": field, "text": manual[field], "imageReadings": manual["imageReadings"]}
 
 
 def _slot_for(doc, page):

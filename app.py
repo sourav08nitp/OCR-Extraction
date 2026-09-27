@@ -450,6 +450,24 @@ def job_question_extract(job_id, key):
         return jsonify(error=f"{type(e).__name__}: {e}"[:300]), 502
 
 
+@app.post("/api/jobs/<job_id>/questions/<key>/image-text")
+def job_question_image_text(job_id, key):
+    job = _job_or_404(job_id)
+    if job["status"] != "done":
+        abort(409)
+    if not ai_fallback.available():
+        return jsonify(error="OPENAI_API_KEY_2 is not set on the server"), 400
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify(review.transcribe_question_image(JOBS_DIR / job_id, key, body.get("part"), body.get("name")))
+    except KeyError:
+        abort(404)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=f"AI image conversion failed: {e}"[:300]), 502
+
+
 @app.post("/api/jobs/<job_id>/questions/<key>/topic")
 def job_question_topic(job_id, key):
     """Topic and/or level for one question, instead of running the whole chapter."""
