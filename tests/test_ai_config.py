@@ -10,13 +10,13 @@ class AIKeyConfigurationTests(unittest.TestCase):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "old-test-key"}, clear=True):
             self.assertFalse(ai_fallback.available())
             with patch("openai.OpenAI") as constructor:
-                with self.assertRaisesRegex(ValueError, "OPENAI_API_KEY2"):
+                with self.assertRaisesRegex(ValueError, "OPENAI_API_KEY_2"):
                     ai_fallback.create_client(timeout=90)
                 constructor.assert_not_called()
 
     def test_second_key_is_passed_explicitly(self):
         with patch.dict(os.environ, {
-            "OPENAI_API_KEY": "old-test-key", "OPENAI_API_KEY2": "new-test-key"
+            "OPENAI_API_KEY": "old-test-key", "OPENAI_API_KEY_2": "new-test-key"
         }, clear=True), patch("openai.OpenAI") as constructor:
             self.assertTrue(ai_fallback.available())
             self.assertIs(ai_fallback.create_client(timeout=120), constructor.return_value)

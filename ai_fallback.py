@@ -3,7 +3,7 @@
 Every answer is checked with KaTeX (katex_check.js, same version/options as the web page). A formula
 that still fails after one corrective retry keeps its original image, so nothing broken is shown.
 
-Needs OPENAI_API_KEY2 in the environment. Model: OPENAI_LATEX_MODEL (default gpt-5.4-mini).
+Needs OPENAI_API_KEY_2 in the environment. Model: OPENAI_LATEX_MODEL (default gpt-5.4-mini).
 """
 
 import base64
@@ -63,16 +63,16 @@ def note_usage(resp, what):
 
 
 def available():
-    return bool(os.environ.get("OPENAI_API_KEY2"))
+    return bool(os.environ.get("OPENAI_API_KEY_2"))
 
 
 def create_client(timeout):
     """Use the configured second key explicitly, without SDK fallback to the first key."""
     from openai import OpenAI
 
-    key = os.environ.get("OPENAI_API_KEY2")
+    key = os.environ.get("OPENAI_API_KEY_2")
     if not key:
-        raise ValueError("OPENAI_API_KEY2 is not set on the server")
+        raise ValueError("OPENAI_API_KEY_2 is not set on the server")
     return OpenAI(api_key=key, timeout=timeout, max_retries=3)
 
 

@@ -533,7 +533,7 @@ MONGODB_IMAGE_URL=/files/
 
 Restart `app.py` afterwards; the push buttons appear once `MONGODB_URI` is set.
 
-- **A real environment variable always wins.** set `OPENAI_API_KEY2` in the environment or `.env`.
+- **A real environment variable always wins.** set `OPENAI_API_KEY_2` in the environment or `.env`.
   A stale line in `.env` cannot silently shadow an existing environment variable.
 - **Quote a value containing `#`, a space or an `@`** - `p@ss#word` needs quotes or the `#` starts a
   comment. `export ` prefixes, single quotes and blank lines are all handled; a line with no `=` is
@@ -697,7 +697,7 @@ push again.
 | NVIDIA driver | **616.92 Studio** (from nvidia.com; Dell's latest was 532.09) | PyTorch cu126 needs CUDA 12.6+. Dell's driver stops at 12.1 and fails with "device busy or unavailable" |
 | PyTorch (main Python 3.13) | `2.14.0+cu126` | GPU build. Falls back to CPU automatically if the GPU isn't usable |
 | Windows graphics setting | `C:\Python313\python.exe` → High Performance (GTX 1650) | Makes sure Python gets the NVIDIA card |
-| OpenAI key | `OPENAI_API_KEY2` in the environment or local `.env` | Passed explicitly to every OpenAI client; `.env` is git-ignored |
+| OpenAI key | `OPENAI_API_KEY_2` in the environment or local `.env` | Passed explicitly to every OpenAI client; `.env` is git-ignored |
 | AI model | `gpt-5.4-mini` (override with the `OPENAI_LATEX_MODEL` env var) | |
 | Node + KaTeX | `node_modules/katex@0.16.11` | Server-side render check |
 | Trial Python | `.venv-ocsr/`, **deleted 19 Sep 2026** to free 2.7 GB | Was Python 3.11 + CPU PyTorch + MolScribe, isolated from the main setup. Recreate steps are in section 6C |
