@@ -45,6 +45,7 @@ class WorkflowTests(unittest.TestCase):
         path = self.job / 'out' / 'structured.json'
         original = path.read_bytes()
         doc = json.loads(original)
+        doc['exercises'][0]['questions'][0]['page_start'] = 5
         names = ['p005_eq000.png', 'p005_eq001.png']
         doc['image_boxes'] = {names[0]: {'page': 5, 'bbox': [441.1, 493.6, 470.1, 599.8]},
                               names[1]: {'page': 5, 'bbox': [440.3, 491.9, 469.1, 598.0]}}
