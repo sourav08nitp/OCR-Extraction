@@ -555,6 +555,30 @@ def syllabus():
     return _load(TOPICS_FILE, {})
 
 
+def document_options(jobs_dir):
+    """Choices from the local syllabus and metadata already saved for uploaded PDFs."""
+    choices = {"module": {"NCERT", "Resonance"},
+               "subject": {"Mathematics", "Physics", "Chemistry", "Biology", "Science"},
+               "chapter": set()}
+    for key in syllabus():
+        parts = key.split("/")
+        if len(parts) >= 3:
+            choices["subject"].add("Mathematics" if parts[-2] == "Maths" else parts[-2])
+            choices["chapter"].add(parts[-1])
+    for job_dir in Path(jobs_dir).iterdir():
+        if not job_dir.is_dir():
+            continue
+        saved = _load(job_dir / "review.json", {}).get("document", {})
+        for field in choices:
+            value = saved.get(field)
+            if isinstance(value, str) and value.strip():
+                choices[field].add(value.strip())
+        chapter = _load(job_dir / "out" / "structured.json", {}).get("chapter")
+        if isinstance(chapter, str) and chapter.strip():
+            choices["chapter"].add(chapter.strip())
+    return {field: sorted(values, key=str.casefold) for field, values in choices.items()}
+
+
 RE_CLASS = re.compile(r"class\s*[-–—:]?\s*(XII|XI|IX|X|VIII|VII|VI|\d{1,2})\b", re.I)
 ROMAN = {"VI": "6", "VII": "7", "VIII": "8", "IX": "9", "X": "10", "XI": "11", "XII": "12"}
 _class_cache = {}

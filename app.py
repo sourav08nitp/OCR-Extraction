@@ -273,6 +273,7 @@ def _review_payload(job_id):
         name, saved["document"].get("subject"), review.detect_class(job_dir))
     return {
         "document": saved["document"],
+        "documentOptions": review.document_options(JOBS_DIR),
         "workflow": review.workflow_status(job_dir),
         "syllabus": {k: v["topics"] for k, v in syl.items()},
         "syllabusSources": {k: v.get("source") for k, v in syl.items()},

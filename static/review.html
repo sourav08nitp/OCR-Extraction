@@ -601,9 +601,9 @@ function draw() {
 
 const DOC_FORM = [
   ["Where these questions belong", [
-    ["module", "Module", "text", "e.g. Resonance, NCERT"],
-    ["chapter", "Chapter", "text", null],
-    ["subject", "Subject", "text", "e.g. Chemistry"],
+    ["module", "Module", "documentChoice", null],
+    ["chapter", "Chapter", "documentChoice", null],
+    ["subject", "Subject", "documentChoice", null],
     ["exam", "Exam name", "exam", "Applies to this chapter; PYQ exam is set separately below."],
     ["section", "Path section", "text", "e.g. All sections"],
   ]],
@@ -648,6 +648,12 @@ function drawDocument() {
       const v = d[f] ?? "";
       let input;
       if (kind === "select") input = selectHtml(f, v, data.options[f].map(o => [o, o]), "— choose —");
+      else if (kind === "documentChoice") {
+        const values = [...new Set([...(data.documentOptions?.[f] || []), v,
+          f === "chapter" ? data.suggested.chapter : ""].filter(Boolean))].sort((a, b) => a.localeCompare(b));
+        const value = v || (f === "chapter" ? data.suggested.chapter : "") || "";
+        input = selectHtml(f, value, values.map(value => [value, value]), `— select ${label.toLowerCase()} —`);
+      }
       else if (kind === "exam") {
         const exams = ["JEE", "NEET", "BOARDS"];
         const value = ({board: 'BOARDS', boards: 'BOARDS', jee: 'JEE', neet: 'NEET'})[String(v).trim().toLowerCase()] || v;
