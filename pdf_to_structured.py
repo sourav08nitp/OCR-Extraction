@@ -44,6 +44,52 @@ RE_PAGE_NUMBER = re.compile(r"(?:page\s*)?[-–(]?\s*\d{1,4}\s*[-–)]?(?:\s*(?:
 # --------------------------------------------------------------------------
 # Step 1-3: page -> ordered lines with equation placeholders
 # --------------------------------------------------------------------------
+def overlapping_image_aliases(boxes):
+    """Merge near-identical PDF footprints, keeping repeated images at other positions."""
+    kept, aliases = [], {}
+    for name, item in boxes.items():
+        if not re.fullmatch(r"p\d+_eq\d+\.png", name):
+            continue
+        box = item["bbox"]
+        area = max(0, box[2] - box[0]) * max(0, box[3] - box[1])
+        if not area:
+            continue
+        for other_name, other in kept:
+            if item["page"] != other["page"]:
+                continue
+            b = other["bbox"]
+            if max(abs(x - y) for x, y in zip(box, b)) > 2:
+                continue
+            intersection = max(0, min(box[2], b[2]) - max(box[0], b[0])) * max(0, min(box[3], b[3]) - max(box[1], b[1]))
+            other_area = (b[2] - b[0]) * (b[3] - b[1])
+            if intersection / (area + other_area - intersection) >= .9:
+                aliases[name] = other_name
+                break
+        else:
+            kept.append((name, item))
+    return aliases
+
+
+def deduplicate_images(doc):
+    """Collapse duplicate crop references without deleting any source files."""
+    aliases = overlapping_image_aliases(doc.get("image_boxes", {}))
+    changed = {}
+    for sec in _sections(doc):
+        names = sec.get("equations", [])
+        for duplicate, original in aliases.items():
+            if duplicate not in names or original not in names:
+                continue
+            sec["text"] = sec["text"].replace(f"[[eq:{duplicate}]]", "")
+            names = [name for name in names if name != duplicate]
+            sec.get("equations_latex", {}).pop(duplicate, None)
+            changed[duplicate] = original
+        sec["equations"] = names
+    if changed:
+        doc.setdefault("duplicate_images", {}).update(changed)
+        build_text_latex(doc)
+    return changed
+
+
 def page_to_lines(plumber_page, pdfium_page, page_no, img_dir, crop=True, boxes=None):
     """crop=False re-reads positions only (images already saved); boxes collects name -> image position."""
     scale = DPI / 72
@@ -59,11 +105,17 @@ def page_to_lines(plumber_page, pdfium_page, page_no, img_dir, crop=True, boxes=
     for w in words:
         tokens.append((w["top"], w["bottom"], w["x0"], "text", w["text"], w["x1"]))
 
+    image_boxes = {f"p{page_no:03d}_eq{i:03d}.png": {"page": page_no,
+                   "bbox": [im["x0"], im["top"], im["x1"], im["bottom"]]}
+                   for i, im in enumerate(plumber_page.images)}
+    duplicates = overlapping_image_aliases(image_boxes)
     for i, im in enumerate(plumber_page.images):
         x0, top, x1, bottom = im["x0"], im["top"], im["x1"], im["bottom"]
         if (x1 - x0) < MIN_IMG_SIZE or (bottom - top) < MIN_IMG_SIZE:
             continue
         name = f"p{page_no:03d}_eq{i:03d}.png"
+        if name in duplicates:
+            continue
         if crop:
             if rendered is None:
                 rendered = pdfium_page.render(scale=scale).to_pil()

@@ -99,6 +99,38 @@ def _key_labels(doc):
     return {key: f"{ex['title']}|{q.get('label', q['number'])}" for key, ex, q in questions(doc)}
 
 
+def deduplicate_saved_images(job_dir, doc):
+    """Repair existing results and corresponding text edits; retain recovery copies."""
+    job_dir = Path(job_dir)
+    original_doc = json.dumps(doc, indent=2, ensure_ascii=False)
+    aliases = pts.deduplicate_images(doc)
+    if not aliases:
+        return
+    backup = job_dir / "out" / "structured.before-image-dedup.json"
+    if not backup.exists():
+        backup.write_text(original_doc, encoding="utf-8")
+    saved = load_review(job_dir)
+    changed = False
+    for manual in saved["questions"].values():
+        for field in ("stemOverride", "solutionOverride"):
+            text = manual.get(field)
+            if not isinstance(text, str):
+                continue
+            for duplicate, original in aliases.items():
+                old, keep = f"![](img:{duplicate})", f"![](img:{original})"
+                text = text.replace(old, "" if keep in text else keep)
+            if text != manual[field]:
+                manual[field] = text
+                changed = True
+    if changed:
+        review_path = job_dir / "review.json"
+        backup = job_dir / "review.before-image-dedup.json"
+        if review_path.exists() and not backup.exists():
+            backup.write_bytes(review_path.read_bytes())
+        save_review(job_dir, saved)
+    pts.save(doc, job_dir / "out")
+
+
 def ensure_current(job_dir):
     """Older results lack answer headings, labels, page regions or the newer line grouping: re-split them
     (fast, keeps LaTeX). Saved edits move with their question, matched by exercise and question number."""
@@ -133,6 +165,7 @@ def ensure_current(job_dir):
         pts.build_text_latex(doc)
         doc["figures_checked"] = True
         pts.save(doc, out)
+    deduplicate_saved_images(job_dir, doc)
     # last, and never saved into structured.json: that file stays the pipeline's own output
     doc["added_questions"] = [_added_question(a) for a in load_review(job_dir)["addedQuestions"]]
     return doc

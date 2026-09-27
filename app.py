@@ -238,6 +238,7 @@ def job_result(job_id):
         abort(409)
     out = JOBS_DIR / job_id / "out"
     doc = json.loads((out / "structured.json").read_text(encoding="utf-8"))
+    review.deduplicate_saved_images(JOBS_DIR / job_id, doc)
     if not doc.get("figures_checked"):
         # made before figure detection existed: diagrams/graphs may hold LaTeX or AI captions; restore them
         pdf_to_structured.classify_figures(doc, out / "images")

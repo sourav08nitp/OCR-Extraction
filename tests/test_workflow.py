@@ -41,6 +41,33 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.json)
         self.assertEqual(response.json['workflow']['stage'], 'ready')
 
+    def test_duplicate_image_cleanup_preserves_edits_and_source_files(self):
+        path = self.job / 'out' / 'structured.json'
+        original = path.read_bytes()
+        doc = json.loads(original)
+        names = ['p005_eq000.png', 'p005_eq001.png']
+        doc['image_boxes'] = {names[0]: {'page': 5, 'bbox': [441.1, 493.6, 470.1, 599.8]},
+                              names[1]: {'page': 5, 'bbox': [440.3, 491.9, 469.1, 598.0]}}
+        sec = doc['exercises'][0]['questions'][0]['question']
+        sec.update(text='Pipe ' + ' '.join(f'[[eq:{n}]]' for n in names), equations=names)
+        path.write_text(json.dumps(doc), encoding='utf-8')
+        for name in names:
+            (self.job / 'out' / 'images' / name).write_bytes(b'source image')
+        saved = review.load_review(self.job)
+        saved['questions']['0-0'] = {'stemOverride': 'Edited ' + ' '.join(f'![](img:{n})' for n in names),
+                                    'solutionOverride': 'My answer', 'topic': 'Arithmetic'}
+        review.save_review(self.job, saved)
+        review.deduplicate_saved_images(self.job, doc)
+        manual = review.load_review(self.job)['questions']['0-0']
+        self.assertEqual(manual['stemOverride'].count('![](img:'), 1)
+        self.assertIn(names[0], manual['stemOverride'])
+        self.assertEqual(manual['solutionOverride'], 'My answer')
+        self.assertEqual(manual['topic'], 'Arithmetic')
+        self.assertTrue((self.job / 'out' / 'structured.before-image-dedup.json').is_file())
+        self.assertTrue((self.job / 'review.before-image-dedup.json').is_file())
+        for name in names:
+            self.assertEqual((self.job / 'out' / 'images' / name).read_bytes(), b'source image')
+
     def test_finalization_persists_and_edits_invalidate(self):
         before_export = review.load_review(self.job)['document'].copy()
         self.finalize()
