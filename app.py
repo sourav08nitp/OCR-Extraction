@@ -216,7 +216,7 @@ def config():
 def job_ai_fix(job_id):
     job = _job_or_404(job_id)
     if not ai_fallback.available():
-        return jsonify(error="OPENAI_API_KEY is not set on the server"), 400
+        return jsonify(error="OPENAI_API_KEY2 is not set on the server"), 400
     if job["status"] in ("queued", "running"):
         return jsonify(error="This job is still running"), 409
     job.update(kind="ai-fix", status="queued", stage="waiting in queue", done=0, total=0, error=None)
@@ -352,7 +352,7 @@ def job_question_text(job_id, key):
 def job_reread_all(job_id):
     job = _job_or_404(job_id)
     if not ai_fallback.available():
-        return jsonify(error="OPENAI_API_KEY is not set on the server"), 400
+        return jsonify(error="OPENAI_API_KEY2 is not set on the server"), 400
     if job["status"] in ("queued", "running"):
         return jsonify(error="This job is still running"), 409
     job.update(kind="reread-all", redo=request.args.get("redo") == "1", status="queued",
@@ -365,7 +365,7 @@ def job_reread_all(job_id):
 def job_fill_topics(job_id):
     job = _job_or_404(job_id)
     if not ai_fallback.available():
-        return jsonify(error="OPENAI_API_KEY is not set on the server"), 400
+        return jsonify(error="OPENAI_API_KEY2 is not set on the server"), 400
     if job["status"] in ("queued", "running"):
         return jsonify(error="This job is still running"), 409
     fields = tuple((request.args.get("fields") or "topic,level").split(","))
@@ -384,7 +384,7 @@ def job_question_add(job_id):
     body = request.get_json(silent=True) or {}
     use_ai = bool(body.get("ai", True))
     if use_ai and not ai_fallback.available():
-        return jsonify(error="OPENAI_API_KEY is not set on the server"), 400
+        return jsonify(error="OPENAI_API_KEY2 is not set on the server"), 400
     try:
         out = review.add_question(JOBS_DIR / job_id, int(body.get("page", 0)),
                                   [float(v) for v in body.get("bbox", [])], use_ai)
@@ -434,7 +434,7 @@ def job_question_extract(job_id, key):
     if job["status"] != "done":
         abort(409)
     if not ai_fallback.available():
-        return jsonify(error="OPENAI_API_KEY is not set on the server"), 400
+        return jsonify(error="OPENAI_API_KEY2 is not set on the server"), 400
     body = request.get_json(silent=True) or {}
     try:
         return jsonify(review.extract_region(JOBS_DIR / job_id, key, body.get("part"), int(body.get("page", 0)),
@@ -455,7 +455,7 @@ def job_question_topic(job_id, key):
     if job["status"] != "done":
         abort(409)
     if not ai_fallback.available():
-        return jsonify(error="OPENAI_API_KEY is not set on the server"), 400
+        return jsonify(error="OPENAI_API_KEY2 is not set on the server"), 400
     body = request.get_json(silent=True) or {}
     fields = tuple(f for f in body.get("fields", ["topic", "level"]) if f in ("topic", "level")) or ("topic", "level")
     try:
@@ -474,7 +474,7 @@ def job_question_ai(job_id, key):
     if job["status"] != "done":
         abort(409)
     if not ai_fallback.available():
-        return jsonify(error="OPENAI_API_KEY is not set on the server"), 400
+        return jsonify(error="OPENAI_API_KEY2 is not set on the server"), 400
     try:
         return jsonify(review.ai_reread(JOBS_DIR / job_id, key))
     except KeyError:
@@ -616,7 +616,7 @@ def job_image_action(job_id, name):
     if action not in ("ai", "skip", "remove"):
         return jsonify(error="action must be ai, skip, or remove"), 400
     if action == "ai" and not ai_fallback.available():
-        return jsonify(error="OPENAI_API_KEY is not set on the server"), 400
+        return jsonify(error="OPENAI_API_KEY2 is not set on the server"), 400
 
     job_dir = JOBS_DIR / job_id
     out = job_dir / "out"

@@ -3,7 +3,7 @@
 Every answer is checked with KaTeX (katex_check.js, same version/options as the web page). A formula
 that still fails after one corrective retry keeps its original image, so nothing broken is shown.
 
-Needs OPENAI_API_KEY in the environment. Model: OPENAI_LATEX_MODEL (default gpt-5.4-mini).
+Needs OPENAI_API_KEY2 in the environment. Model: OPENAI_LATEX_MODEL (default gpt-5.4-mini).
 """
 
 import base64
@@ -63,7 +63,17 @@ def note_usage(resp, what):
 
 
 def available():
-    return bool(os.environ.get("OPENAI_API_KEY"))
+    return bool(os.environ.get("OPENAI_API_KEY2"))
+
+
+def create_client(timeout):
+    """Use the configured second key explicitly, without SDK fallback to the first key."""
+    from openai import OpenAI
+
+    key = os.environ.get("OPENAI_API_KEY2")
+    if not key:
+        raise ValueError("OPENAI_API_KEY2 is not set on the server")
+    return OpenAI(api_key=key, timeout=timeout, max_retries=3)
 
 
 def model_name():
@@ -184,9 +194,7 @@ def maths_spans(text):
 
 def transcribe_region(png_bytes, n_figures=0, part=None):
     r"""One whole question (its highlighted box) -> {"question", "solution", "katexErrors"} with \(...\) maths."""
-    from openai import OpenAI
-
-    client = OpenAI(timeout=120, max_retries=3)
+    client = create_client(timeout=120)
     hint = f" (this question has {n_figures} figure(s))" if n_figures else ""
     prompt = REGION_PROMPT.replace("{fig_hint}", hint)
     if part in ("stem", "sol"):
@@ -227,9 +235,7 @@ def transcribe(items, progress=None):
     """items: list of (image_path, context_sentence).
     -> {image_path: {"kind": formula|figure|blank|None, "latex": str|None, "error": str|None}}.
     latex None means keep the image; kind "figure" means it is a picture and should stay one."""
-    from openai import OpenAI
-
-    client = OpenAI(timeout=90, max_retries=3)
+    client = create_client(timeout=90)
     model = model_name()
     cache = _Cache()
     results, done = {}, [0]

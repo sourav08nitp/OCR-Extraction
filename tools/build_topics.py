@@ -124,10 +124,9 @@ SUGGEST_PROMPT = (
 
 
 def suggest_topics(chapter, cls, subject):
-    from openai import OpenAI
     import ai_fallback
 
-    r = OpenAI(timeout=90, max_retries=3).chat.completions.create(
+    r = ai_fallback.create_client(timeout=90).chat.completions.create(
         model=ai_fallback.model_name(), response_format={"type": "json_object"}, max_completion_tokens=1200,
         messages=[{"role": "user", "content": SUGGEST_PROMPT.format(chapter=chapter, cls=cls, subject=subject)}])
     data = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", r.choices[0].message.content.strip()))

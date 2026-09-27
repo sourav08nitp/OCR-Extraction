@@ -1,7 +1,7 @@
 """Reads a .env file in the project root, so connection strings and keys live outside the code.
 
-Real environment variables always win. OPENAI_API_KEY is already set for your Windows user, and a
-stale line in .env should not silently shadow it - delete the line, or change the real variable.
+Real environment variables always win. Set OPENAI_API_KEY2 in your environment or this file.
+A stale line in .env does not shadow an existing environment variable.
 
 .env is for secrets: keep it out of git and out of backups. .env.example lists the names with no
 values, and is safe to share.

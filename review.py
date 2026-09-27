@@ -658,7 +658,6 @@ def fill_topics(job_dir, progress=None, redo=False, batch=12, fields=("topic", "
     """Ask the AI to tag every question with a topic (from the allowed list) and/or a difficulty level.
     keys: only these question keys, for tagging one question on its own."""
     import ai_fallback
-    from openai import OpenAI
 
     job_dir = Path(job_dir)
     fields = [f for f in fields if f in ("topic", "level")]
@@ -690,7 +689,7 @@ def fill_topics(job_dir, progress=None, redo=False, batch=12, fields=("topic", "
     cls_subject = " ".join(filter(None, [(review["document"].get("syllabusChapter") or "").rsplit("/", 1)[0],
                                          review["document"].get("chapter")])) or "school chapter"
     shape = ", ".join(f'"{f}": ...' for f in fields)
-    client = OpenAI(timeout=120, max_retries=3)
+    client = ai_fallback.create_client(timeout=120)
     tagged, unplaced, done = {}, 0, 0
     for i in range(0, len(items), batch):
         chunk = items[i:i + batch]
