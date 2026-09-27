@@ -231,10 +231,11 @@ def transcribe_region(png_bytes, n_figures=0, part=None):
     return {"question": question, "solution": solution, "katexErrors": errors}
 
 
-def transcribe(items, progress=None):
+def transcribe(items, progress=None, *, force=False):
     """items: list of (image_path, context_sentence).
     -> {image_path: {"kind": formula|figure|blank|None, "latex": str|None, "error": str|None}}.
-    latex None means keep the image; kind "figure" means it is a picture and should stay one."""
+    latex None means keep the image; kind "figure" means it is a picture and should stay one.
+    force requests a fresh AI response, even when a successful result is cached."""
     client = create_client(timeout=90)
     model = model_name()
     cache = _Cache()
@@ -245,7 +246,11 @@ def transcribe(items, progress=None):
         path, context = item
         png = Path(path).read_bytes()
         key = f"v{PROMPT_VERSION}:{model}:{hashlib.md5(png).hexdigest()}"
-        hit = cache.get(key)
+        hit = None if force else cache.get(key)
+        # A failed conversion must be retried rather than replayed indefinitely.
+        if hit is not None and (hit.get("error") or
+                                (hit.get("kind") == "formula" and not hit.get("latex"))):
+            hit = None
         if hit is None:
             try:
                 kind, tex, raw = _ask(client, model, png, context)

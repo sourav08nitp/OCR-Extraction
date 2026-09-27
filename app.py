@@ -635,7 +635,7 @@ def job_image_action(job_id, name):
         context = next((line.replace(token, "[image]") for sec in sections
                         for line in sec["text"].splitlines() if token in line), "")
         try:
-            answer = ai_fallback.transcribe([(image, context)])[image]
+            answer = ai_fallback.transcribe([(image, context)], force=True)[image]
         except Exception as e:
             return jsonify(error=f"AI re-read failed: {e}"[:300]), 502
         if answer.get("kind") == "figure":
