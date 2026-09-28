@@ -506,7 +506,7 @@ async function extractFromBox(key, part, bbox, page) {
     if (q) q.manual[j.field] = j.text;
     const warnings = [];
     if (j.katexErrors?.length) warnings.push(`${j.katexErrors.length} maths piece(s) need checking`);
-    if (j.missingFigures) warnings.push('use Crop to add any missing diagrams');
+    if (j.missingFigures) warnings.push('check the retained crop for any missing diagrams');
     toast(`${part === 'stem' ? 'Question' : 'Answer'} text replaced from the selected box` + (warnings.length ? ` — ${warnings.join('; ')}` : ''));
   } catch (e) { toast('Could not extract: ' + e.message); }
   extractBusy = null;

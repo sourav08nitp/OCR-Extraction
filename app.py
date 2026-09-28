@@ -176,11 +176,15 @@ def _worker():
             else:
                 model = _get_model(job) if job["latex"] else None
                 doc = pdf_to_structured.run(_ensure_source(job_id, job), job_dir / "out", want_latex=job["latex"],
-                                            progress=progress, model=model, use_ai=False)
+                                            progress=progress, model=model, use_ai=False,
+                                            ai_ocr=bool(job.get("ai")))
                 if job.get("ai"):
                     if review.has_scanned_pages(doc):
-                        # scanned pages: one AI call per question reads better than one per formula, and costs ~10x less
-                        job["result"] = review.ai_reread_all(job_dir, progress)
+                        # AI re-reads OCR-detected questions and audits every scanned page
+                        # for question starts OCR missed altogether.
+                        recovered = review.ai_recover_missing_questions(job_dir, progress)
+                        job["result"] = {**review.ai_reread_all(job_dir, progress),
+                                         "recovered": recovered}
                     else:
                         _ai_fix_existing(job_dir / "out", progress)
             job.update(status="done", stage="done")

@@ -90,7 +90,7 @@ def deduplicate_images(doc):
     return changed
 
 
-def page_to_lines(plumber_page, pdfium_page, page_no, img_dir, crop=True, boxes=None):
+def page_to_lines(plumber_page, pdfium_page, page_no, img_dir, crop=True, boxes=None, scanned_pages=None):
     """crop=False re-reads positions only (images already saved); boxes collects name -> image position."""
     scale = DPI / 72
     rendered = None  # render lazily, only if the page has images
@@ -99,6 +99,8 @@ def page_to_lines(plumber_page, pdfium_page, page_no, img_dir, crop=True, boxes=
 
     words = plumber_page.extract_words(keep_blank_chars=False, use_text_flow=False)
     if _is_scanned(plumber_page, words):
+        if scanned_pages is not None:
+            scanned_pages.append(page_no)
         tokens = _ocr_tokens(pdfium_page, page_no, img_dir, boxes)
         return _tokens_to_lines(tokens, plumber_page, page_no)
 
@@ -685,12 +687,13 @@ def to_markdown(doc):
     return "\n".join(out)
 
 
-def run(pdf_path, out_dir, want_latex=False, progress=_print_progress, model=None, use_ai=False):
+def run(pdf_path, out_dir, want_latex=False, progress=_print_progress, model=None, use_ai=False,
+        ai_ocr=False):
     pdf_path, out_dir = Path(pdf_path), Path(out_dir)
     img_dir = out_dir / "images"
     img_dir.mkdir(parents=True, exist_ok=True)
 
-    doc = _read_and_structure(pdf_path, img_dir, crop=True, progress=progress)
+    doc = _read_and_structure(pdf_path, img_dir, crop=True, progress=progress, ai_ocr=ai_ocr)
     if want_latex:
         add_latex(doc, img_dir, model=model, progress=progress, use_ai=use_ai)
     save(doc, out_dir)
@@ -701,19 +704,46 @@ STRUCTURE_VERSION = 7  # 6: headings behind a bullet image; 7: pages split into 
 #                        4: tall figures get their own line instead of swallowing the text beside them
 
 
-def _read_and_structure(pdf_path, img_dir, crop, progress=_print_progress):
-    all_lines, boxes, pages = [], {}, {}
+def _read_and_structure(pdf_path, img_dir, crop, progress=_print_progress, ai_ocr=False):
+    all_lines, boxes, pages, scanned_pages, ai_ocr_pages = [], {}, {}, [], []
     pdfium_doc = pdfium.PdfDocument(str(pdf_path))
     try:
         with pdfplumber.open(str(pdf_path)) as pdf:
             for idx, page in enumerate(pdf.pages):
                 pages[idx + 1] = [round(page.width, 1), round(page.height, 1)]
-                all_lines += page_to_lines(page, pdfium_doc[idx], idx + 1, img_dir, crop=crop, boxes=boxes)
+                try:
+                    page_lines = page_to_lines(page, pdfium_doc[idx], idx + 1, img_dir, crop=crop,
+                                               boxes=boxes, scanned_pages=scanned_pages)
+                except Exception:
+                    if not ai_ocr:
+                        raise
+                    # A page still enters the structured result when the local OCR engine
+                    # is unavailable or crashes. AI reads the entire rendered page once.
+                    import io
+                    import ai_fallback
+
+                    image = pdfium_doc[idx].render(scale=DPI / 72).to_pil().convert("RGB")
+                    buf = io.BytesIO()
+                    image.save(buf, "PNG")
+                    lines = ai_fallback.transcribe_page_lines(buf.getvalue())
+                    n = max(1, len(lines))
+                    page_lines = [{"page": idx + 1, "text": line,
+                                   "top": round(page.height * (.06 + .88 * i / n), 1),
+                                   "bottom": round(page.height * (.06 + .88 * (i + 1) / n), 1),
+                                   "x0": round(page.width * .05, 1),
+                                   "x1": round(page.width * .95, 1)}
+                                  for i, line in enumerate(lines)]
+                    ai_ocr_pages.append(idx + 1)
+                    if idx + 1 not in scanned_pages:
+                        scanned_pages.append(idx + 1)
+                all_lines += page_lines
                 progress("pages", idx + 1, len(pdf.pages))
     finally:
         pdfium_doc.close()
     doc = structure(all_lines)
-    doc.update(image_boxes=boxes, page_sizes=pages, structure_version=STRUCTURE_VERSION)
+    doc.update(image_boxes=boxes, page_sizes=pages, scanned_pages=scanned_pages,
+               ai_ocr_pages=ai_ocr_pages,
+               structure_version=STRUCTURE_VERSION)
     return doc
 
 

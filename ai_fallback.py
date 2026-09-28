@@ -167,20 +167,54 @@ def _ask(client, model, png_bytes, context, error=None, previous=None):
     return (*_parse(text), text)
 
 
+TRANSCRIPTION_RULES = (
+    "Read the entire supplied image in natural reading order, top to bottom and left to right within each column. "
+    "Before replying, check the top, bottom, margins, every line, and every (a)/(b)/(i)/(ii) subpart for omissions. "
+    "Preserve all visible words, numbers, options, units, superscripts, subscripts, signs, arrows, "
+    "punctuation, worked steps, and repeated lines. Do not summarize, solve, simplify, correct, or invent text. "
+    "If a character is genuinely unreadable, write [unclear] in its place rather than guessing. "
+    r"Use plain text for prose and \(...\) for each mathematical or chemical expression; never use $ delimiters. "
+    "Put separate calculation steps on separate lines. Keep option and subpart labels exactly. "
+    "For a readable table, transcribe every row and cell in Markdown table form. "
+    "For a diagram, graph, photograph, or drawing, insert [[FIGURE]] on its own line at its position; "
+    "do not replace a figure with a guess about its contents."
+)
+
 REGION_PROMPT = (
-    "The image shows ONE question from a school textbook solutions book (maths, physics, chemistry or biology), "
-    "usually followed by its answer or solution. Transcribe it faithfully.\n"
-    'Reply with JSON only: {"question": "...", "solution": "..."}.\n'
-    "Rules:\n"
-    "- Plain text for words. ALL maths and chemical formulas inline between \\\\( and \\\\) (KaTeX syntax), "
-    "for example \\\\(x^2 + 1\\\\); a step that is only maths goes on its own line, still between \\\\( and \\\\). "
-    "Never use $ signs as maths delimiters.\n"
-    "- Keep item labels such as (i), (ii), (a) and symbols such as \\Rightarrow, \\therefore. Keep one line per step.\n"
-    "- Leave out the heading words (Q.2., Question 2:, Sol., Answer:, Ans.) - only the content.\n"
-    "- Leave out page headers, page numbers, chapter-title banners and anything from a different question.\n"
-    "- Where a diagram, graph, table picture or figure appears, write [[FIGURE]] on its own line instead of describing "
-    "it{fig_hint}.\n"
-    "- Do not solve, simplify or correct anything. If there is no solution in the image, use an empty string."
+    "Transcribe the visible textbook question and its printed answer/solution from this image. "
+    "Separate them only where the page actually switches from question to answer; "
+    "if no answer is visible, use an empty solution. "
+    'Return JSON only: {"question":"...","solution":"..."}.\n' + TRANSCRIPTION_RULES
+)
+
+CROP_PROMPT = (
+    "This image is a user-selected rectangle from a PDF. It may contain a complete question, "
+    "a partial sentence, several subparts, a worked answer, a table, or a figure. "
+    "Transcribe EVERYTHING inside the rectangle, including printed Q./Sol./Ans. labels if visible. "
+    "Do not discard text because it seems to belong to another question or page. "
+    "Put the entire transcription in the {field} field and leave the other field empty. "
+    'Return JSON only: {{"question":"...","solution":"..."}}.\n' + TRANSCRIPTION_RULES
+)
+
+PAGE_QUESTIONS_PROMPT = (
+    "Audit this entire scanned textbook page after local OCR. Find EVERY explicitly numbered question "
+    "whose Q./Question heading begins on this page, including questions near the top and bottom. "
+    "For each, transcribe all question text and every answer/solution line visible on THIS page. "
+    "Do not add a continuation from the previous page as a new question. "
+    "Do not invent the remainder of a question or answer that continues onto the next page. "
+    "Include its printed exercise heading if visible. Give the bounding rectangle from the first "
+    "question line through the last visible answer line as [left,top,right,bottom] fractions of page width/height. "
+    "If no explicitly numbered question begins here, return an empty array. "
+    'Return JSON only: {"questions":[{"number":1,"exercise":"EXERCISE 1.1",'
+    '"question":"...","solution":"...","bbox":[0.1,0.2,0.9,0.8]}]}.\n' + TRANSCRIPTION_RULES
+)
+
+PAGE_LINES_PROMPT = (
+    "The local OCR could not read this PDF page. Transcribe every visible line in reading order, "
+    "including chapter and exercise headings, question numbers, answer headings, answer choices, "
+    "tables, formulas, and worked solution steps. Put each printed line in a separate JSON string. "
+    "Keep Q./Question and Sol./Answer prefixes exactly so the question splitter can find boundaries. "
+    'Return JSON only: {"lines":["first printed line","next printed line"]}.\n' + TRANSCRIPTION_RULES
 )
 # maths spans in what the model returns; $...$ is accepted too because the model occasionally falls back to it
 RE_MATH = re.compile(r"\\\((.+?)\\\)|\\\[(.+?)\\\]|\$([^$]+)\$", re.S)
@@ -192,24 +226,35 @@ def maths_spans(text):
     return [m.group(1) or m.group(2) or m.group(3) or "" for m in RE_MATH.finditer(text or "")]
 
 
+def _vision_image(png_bytes, *, margin=True):
+    """Preserve small print on dense PDF crops when the configured model supports it."""
+    model = model_name().lower()
+    detail = "original" if re.match(r"^gpt-(?:5\.(?:4|5|6)|6)(?:[-.]|$)", model) else "high"
+    return {"type": "image_url", "image_url": {
+        "url": "data:image/png;base64," + base64.b64encode(
+            _for_model(png_bytes) if margin else png_bytes).decode(),
+        "detail": detail}}
+
+
 def transcribe_region(png_bytes, n_figures=0, part=None):
     r"""One whole question (its highlighted box) -> {"question", "solution", "katexErrors"} with \(...\) maths."""
     client = create_client(timeout=120)
-    hint = f" (this question has {n_figures} figure(s))" if n_figures else ""
-    prompt = REGION_PROMPT.replace("{fig_hint}", hint)
+    prompt = REGION_PROMPT
     if part in ("stem", "sol"):
         field = "question" if part == "stem" else "solution"
-        prompt += (f"\nThis selected box contains only the {field} part of an existing question. "
-                   f"Transcribe everything visible into the JSON '{field}' field and leave the other field empty. "
-                   "Do not solve, complete, or invent content outside this box.")
+        prompt = CROP_PROMPT.format(field=field)
+    if n_figures:
+        prompt += f"\nThe current extraction found {n_figures} figure(s); keep their positions in the text."
     content = [{"type": "text", "text": prompt},
-               {"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(png_bytes).decode()}}]
+               _vision_image(png_bytes)]
     messages = [{"role": "user", "content": content}]
 
     def ask():
-        r = client.chat.completions.create(model=model_name(), messages=messages, max_completion_tokens=8000,
+        r = client.chat.completions.create(model=model_name(), messages=messages, max_completion_tokens=12000,
                                            response_format={"type": "json_object"})
         note_usage(r, "whole question re-read")
+        if r.choices[0].finish_reason == "length":
+            raise ValueError("AI response was cut off; select a smaller area or retry")
         text = r.choices[0].message.content
         d = json.loads(re.sub(r"^```(?:json)?\s*|\s*```$", "", text.strip()))
         return str(d.get("question") or ""), str(d.get("solution") or ""), text
@@ -229,6 +274,42 @@ def transcribe_region(png_bytes, n_figures=0, part=None):
         if len(e2) < len(errors):
             question, solution, errors = q2, s2, e2
     return {"question": question, "solution": solution, "katexErrors": errors}
+
+
+def transcribe_page_questions(png_bytes):
+    """Audit one scanned page for question starts the local OCR failed to find."""
+    client = create_client(timeout=180)
+    response = client.chat.completions.create(
+        model=model_name(),
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": PAGE_QUESTIONS_PROMPT}, _vision_image(png_bytes, margin=False)]}],
+        max_completion_tokens=16000, response_format={"type": "json_object"})
+    note_usage(response, "scanned page question recovery")
+    if response.choices[0].finish_reason == "length":
+        raise ValueError("AI page response was cut off; no partial questions were saved")
+    payload = json.loads(response.choices[0].message.content or "{}")
+    questions = payload.get("questions")
+    if not isinstance(questions, list):
+        raise ValueError("AI page response did not contain a question list")
+    return [q for q in questions if isinstance(q, dict)]
+
+
+def transcribe_page_lines(png_bytes):
+    """Emergency full-page text pass when the local OCR reader raises an error."""
+    client = create_client(timeout=180)
+    response = client.chat.completions.create(
+        model=model_name(),
+        messages=[{"role": "user", "content": [
+            {"type": "text", "text": PAGE_LINES_PROMPT}, _vision_image(png_bytes, margin=False)]}],
+        max_completion_tokens=16000, response_format={"type": "json_object"})
+    note_usage(response, "scanned page OCR fallback")
+    if response.choices[0].finish_reason == "length":
+        raise ValueError("AI page response was cut off; no partial page was saved")
+    payload = json.loads(response.choices[0].message.content or "{}")
+    lines = payload.get("lines")
+    if not isinstance(lines, list):
+        raise ValueError("AI page response did not contain text lines")
+    return [line.strip() for line in lines if isinstance(line, str) and line.strip()]
 
 
 def transcribe(items, progress=None, *, force=False):

@@ -213,11 +213,11 @@
     <div>
       <label class="opt">Project <select id="projectId"><option value="">No project</option></select></label>
       <label class="opt"><input type="checkbox" id="latex" checked> Convert formula images to LaTeX</label>
-      <label class="opt" id="aiOpt" hidden><input type="checkbox" id="ai" checked> Use AI (<span id="aiModel"></span>) for formulas the local model can't read</label>
+      <label class="opt" id="aiOpt" hidden><input type="checkbox" id="ai" checked> Use AI (<span id="aiModel"></span>) for unreadable formulas and scanned-page questions</label>
     </div>
     <button id="go" disabled>Extract</button>
   </div>
-  <div class="hint">With LaTeX on, a 65-page chapter takes around 5 minutes on the GPU (about 8 on CPU only). Without it, under a minute.</div>
+  <div class="hint">With LaTeX on, a 65-page chapter takes around 5 minutes on the GPU (about 8 on CPU only). Without it, under a minute. With AI on, scanned pages are audited page by page and missed questions are added for review; this takes longer and uses API credits.</div>
   <div class="error" id="uploadErr"></div>
   <div id="jobList"></div>
 </section>
@@ -232,6 +232,7 @@
 
 <section id="result">
   <div class="stats ui" id="stats"></div>
+  <div class="hint ui" id="aiAuditNotice" role="status"></div>
   <div class="layout">
     <nav class="ui" id="nav"></nav>
     <main id="content"></main>
@@ -343,7 +344,18 @@ async function poll(id) {
   } catch { if (id === jobId) setTimeout(() => poll(id), 2000); return; }
 
   if (j.status === "error") { $("pErr").textContent = j.error; addRestart($("progress")); return; }
-  if (j.status === "done") { loadResult(id); return; }
+  if (j.status === "done") {
+    const recovered = j.result?.recovered;
+    const failures = Object.keys(recovered?.failed || {});
+    $("aiAuditNotice").textContent = recovered
+      ? `AI audited ${recovered.pages} scanned page(s) and recovered ${recovered.added} question(s). `
+        + (failures.length ? `${failures.length} page(s) could not be checked; inspect them in Review.`
+                           : 'Check recovered questions in Review.')
+      : '';
+    $("aiAuditNotice").className = failures.length ? 'error ui' : 'hint ui';
+    loadResult(id);
+    return;
+  }
 
   $("pTitle").textContent = STAGES[j.stage] || j.stage;
   const bar = $("bar");

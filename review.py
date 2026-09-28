@@ -995,19 +995,43 @@ def extract_region(job_dir, key, part, page, bbox_norm):
         bx0, by0, bx1, by1 = b["bbox"]
         if box[0] <= (bx0 + bx1) / 2 <= box[2] and box[1] <= (by0 + by1) / 2 <= box[3]:
             figures.append(name)
-    result = ai_fallback.transcribe_region(region_png(job_dir / "input.pdf", [{"page": page, "bbox": box}], pad=0), len(figures), part=part)
+    selected_png = region_png(job_dir / "input.pdf", [{"page": page, "bbox": box}], pad=0)
+    result = ai_fallback.transcribe_region(selected_png, len(figures), part=part)
     text = "\n\n".join(t.strip() for t in (result["question"], result["solution"]) if t.strip())
     if not text:
-        raise ValueError("AI found no readable text in that selection; the question was left unchanged")
+        from PIL import Image
+        import io
+
+        image = Image.open(io.BytesIO(selected_png)).convert("L")
+        dark_pixels = sum(image.histogram()[:220])
+        if dark_pixels <= max(40, image.width * image.height * .0005):
+            raise ValueError("The selected area appears blank; the question was left unchanged")
+        text = "[[FIGURE]]"  # retain an unreadable but nonblank crop rather than erase it
     missing_figures = max(0, text.count("[[FIGURE]]") - len(figures))
+    new_figure_name = None
+    if missing_figures:
+        # The OCR pass never identified this picture. Keep the actual selected source
+        # image beside the AI text instead of silently dropping its [[FIGURE]] marker.
+        # The selected crop contains every otherwise untracked figure in this box.
+        saved = load_review(job_dir)
+        n = 1 + len(saved["manualImages"])
+        new_figure_name = f"manual_{n:03d}.png"
+        while (job_dir / "out" / "images" / new_figure_name).exists():
+            n += 1
+            new_figure_name = f"manual_{n:03d}.png"
+        figures.append(new_figure_name)
     text = to_paren_delims(place_figures(text, original, figures))
     if not text.strip():
         raise ValueError("AI found no readable text in that selection; the question was left unchanged")
     saved = load_review(job_dir)
+    if new_figure_name:
+        (job_dir / "out" / "images" / new_figure_name).write_bytes(selected_png)
+        saved["manualImages"][new_figure_name] = {"page": page, "bbox": [round(v, 1) for v in box]}
     manual = saved["questions"].setdefault(key, {})
     manual[field] = text
     save_review(job_dir, saved)
-    return {"field": field, "text": manual[field], "katexErrors": result["katexErrors"], "missingFigures": missing_figures}
+    return {"field": field, "text": manual[field], "katexErrors": result["katexErrors"],
+            "missingFigures": 0 if new_figure_name else missing_figures}
 
 
 def transcribe_question_image(job_dir, key, part, name, page, bbox_norm):
@@ -1163,6 +1187,8 @@ def ai_reread_all(job_dir, progress=None, workers=4, redo_edited=False):
     review = load_review(job_dir)
     todo = []
     for key, _, q in questions(doc):
+        if q.get("added"):
+            continue  # these were already AI-read from their source box
         m = review["questions"].get(key, {})
         edited = m.get("stemOverride") is not None or m.get("solutionOverride") is not None
         if q.get("regions") and (redo_edited or not edited or m.get("aiReread")):
@@ -1192,7 +1218,81 @@ def ai_reread_all(job_dir, progress=None, workers=4, redo_edited=False):
 
 
 def has_scanned_pages(doc):
-    return any("_ocr" in n for n in doc.get("image_boxes", {}))
+    return bool(doc.get("scanned_pages")) or any("_ocr" in n for n in doc.get("image_boxes", {}))
+
+
+def ai_recover_missing_questions(job_dir, progress=None):
+    """Audit scanned pages for numbered questions omitted by local OCR.
+
+    Existing questions are never overwritten. Recovered entries are flagged in Review,
+    and the original PDF region is retained when a figure was seen.
+    """
+    import math
+    import ai_fallback
+
+    job_dir = Path(job_dir)
+    doc = ensure_current(job_dir)
+    pages = {int(p) for p in doc.get("scanned_pages", [])}
+    pages.update(int(m.group(1)) for name in doc.get("image_boxes", {})
+                 if (m := re.match(r"p(\d+)_ocr", name)))
+    sizes = {int(p): size for p, size in doc.get("page_sizes", {}).items()}
+    pages = sorted(p for p in pages if p in sizes)
+    saved = load_review(job_dir)
+    known = {(q.get("page_start") or (q.get("regions") or [{}])[0].get("page"),
+              str(q.get("label") or q.get("number"))) for _, _, q in questions(doc)}
+    known.update((entry.get("page"), str(entry.get("label") or entry.get("number")))
+                 for entry in saved["addedQuestions"])
+    added, failed = 0, {}
+    for index, page in enumerate(pages, 1):
+        try:
+            w, h = sizes[page]
+            full_page = region_png(job_dir / "input.pdf", [
+                {"page": page, "bbox": [0, 0, w, h]}], pad=0)
+            found = ai_fallback.transcribe_page_questions(full_page)
+            for item in found:
+                label = str(item.get("number") or "").strip()
+                if not re.fullmatch(r"\d+(?:\.\d+)*", label) or (page, label) in known:
+                    continue
+                stem = to_paren_delims(str(item.get("question") or "").strip())
+                solution = to_paren_delims(str(item.get("solution") or "").strip())
+                if not stem:
+                    continue
+                raw_box = item.get("bbox")
+                valid_box = (isinstance(raw_box, list) and len(raw_box) == 4 and
+                             all(isinstance(v, (int, float)) and math.isfinite(v) and 0 <= v <= 1
+                                 for v in raw_box) and raw_box[2] > raw_box[0] and raw_box[3] > raw_box[1])
+                bbox = ([round(raw_box[0] * w, 1), round(raw_box[1] * h, 1),
+                         round(raw_box[2] * w, 1), round(raw_box[3] * h, 1)]
+                        if valid_box else [0, 0, w, h])
+                figures_seen = (stem + solution).count("[[FIGURE]]")
+                entry_id = object_id()[:12]
+                if figures_seen:
+                    name = f"manual_ai_{entry_id}.png"
+                    (job_dir / "out" / "images" / name).write_bytes(
+                        region_png(job_dir / "input.pdf", [{"page": page, "bbox": bbox}], pad=0))
+                    saved["manualImages"][name] = {"page": page, "bbox": bbox}
+                    if "[[FIGURE]]" in stem:
+                        stem = stem.replace("[[FIGURE]]", f"![](img:{name})", 1)
+                    else:
+                        solution = solution.replace("[[FIGURE]]", f"![](img:{name})", 1)
+                    stem = stem.replace("[[FIGURE]]", "")
+                    solution = solution.replace("[[FIGURE]]", "")
+                exercise = str(item.get("exercise") or "").strip() or _slot_for(doc, page)[0]
+                entry = {"id": entry_id, "page": page, "bbox": bbox, "exercise": exercise,
+                         "number": int(label.split(".")[-1]), "label": label,
+                         "stem": stem, "solution": solution, "figuresSeen": figures_seen,
+                         "aiRecovered": True,
+                         "addedAt": datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")}
+                saved["addedQuestions"].append(entry)
+                saved["questions"][f"add-{entry_id}"] = {"flagged": True}
+                known.add((page, label))
+                added += 1
+            save_review(job_dir, saved)
+        except Exception as error:
+            failed[str(page)] = f"{type(error).__name__}: {error}"[:200]
+        if progress:
+            progress("AI auditing scanned pages", index, len(pages))
+    return {"pages": len(pages), "added": added, "failed": failed}
 
 
 def _to_int(v):

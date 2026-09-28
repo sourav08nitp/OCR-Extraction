@@ -1,12 +1,48 @@
 import os
+import io
+import json
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
+
+from PIL import Image
 
 import ai_fallback
 
 
 class AIKeyConfigurationTests(unittest.TestCase):
+    @staticmethod
+    def _png():
+        output = io.BytesIO()
+        Image.new('RGB', (300, 180), 'white').save(output, 'PNG')
+        return output.getvalue()
+
+    def test_selected_crop_uses_complete_content_prompt_and_original_image_detail(self):
+        reply = SimpleNamespace(choices=[SimpleNamespace(finish_reason='stop', message=SimpleNamespace(
+            content=json.dumps({'question': 'All three subparts', 'solution': ''})))], usage=None)
+        client = Mock()
+        client.chat.completions.create.return_value = reply
+        with patch.object(ai_fallback, 'create_client', return_value=client), \
+             patch.object(ai_fallback, 'note_usage'), \
+             patch.object(ai_fallback, 'model_name', return_value='gpt-5.4-mini'):
+            result = ai_fallback.transcribe_region(self._png(), part='stem')
+        self.assertEqual(result['question'], 'All three subparts')
+        content = client.chat.completions.create.call_args.kwargs['messages'][0]['content']
+        self.assertIn('EVERYTHING inside the rectangle', content[0]['text'])
+        self.assertIn('question field', content[0]['text'])
+        self.assertEqual(content[1]['image_url']['detail'], 'original')
+
+    def test_truncated_page_audit_cannot_save_partial_questions(self):
+        reply = SimpleNamespace(choices=[SimpleNamespace(finish_reason='length', message=SimpleNamespace(
+            content=json.dumps({'questions': [{'number': 1}]})))], usage=None)
+        client = Mock()
+        client.chat.completions.create.return_value = reply
+        with patch.object(ai_fallback, 'create_client', return_value=client), \
+             patch.object(ai_fallback, 'note_usage'):
+            with self.assertRaisesRegex(ValueError, 'cut off'):
+                ai_fallback.transcribe_page_questions(self._png())
+
     def test_old_key_alone_does_not_enable_ai(self):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "old-test-key"}, clear=True):
             self.assertFalse(ai_fallback.available())

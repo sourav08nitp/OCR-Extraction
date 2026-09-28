@@ -198,6 +198,80 @@ class WorkflowTests(unittest.TestCase):
         self.client.put('/api/jobs/abc123/review', json=body)
         self.assertEqual(review.load_review(self.job)['questions']['0-0']['imageReadings'], [source])
 
+    def test_extract_selected_figure_keeps_pdf_crop_and_other_question_part(self):
+        path = self.job / 'out' / 'structured.json'
+        doc = json.loads(path.read_text(encoding='utf-8'))
+        doc['page_sizes'] = {'1': [600, 800]}
+        path.write_text(json.dumps(doc), encoding='utf-8')
+        before = review.load_review(self.job)['document']
+        with patch.object(review, 'region_png', return_value=b'full selected PDF crop'), \
+             patch('ai_fallback.transcribe_region', return_value={
+                 'question': 'Label A\n[[FIGURE]]\nLabel B', 'solution': '', 'katexErrors': []}):
+            result = self.client.post('/api/jobs/abc123/questions/0-0/extract',
+                                      json={'part': 'stem', 'page': 1, 'bbox': [.1, .1, .8, .5]})
+        self.assertEqual(result.status_code, 200, result.json)
+        saved = review.load_review(self.job)
+        image_name = next(iter(saved['manualImages']))
+        self.assertIn(f'![](img:{image_name})', saved['questions']['0-0']['stemOverride'])
+        self.assertEqual((self.job / 'out' / 'images' / image_name).read_bytes(), b'full selected PDF crop')
+        self.assertNotIn('solutionOverride', saved['questions']['0-0'])
+        self.assertEqual(saved['document'], before)
+
+    def test_unreadable_nonblank_selection_is_kept_as_image(self):
+        import io
+        from PIL import Image, ImageDraw
+
+        path = self.job / 'out' / 'structured.json'
+        doc = json.loads(path.read_text(encoding='utf-8'))
+        doc['page_sizes'] = {'1': [600, 800]}
+        path.write_text(json.dumps(doc), encoding='utf-8')
+        image = Image.new('RGB', (200, 100), 'white')
+        ImageDraw.Draw(image).rectangle((20, 20, 150, 70), fill='black')
+        output = io.BytesIO()
+        image.save(output, 'PNG')
+        with patch.object(review, 'region_png', return_value=output.getvalue()), \
+             patch('ai_fallback.transcribe_region', return_value={
+                 'question': '', 'solution': '', 'katexErrors': []}):
+            response = self.client.post('/api/jobs/abc123/questions/0-0/extract',
+                                        json={'part': 'sol', 'page': 1, 'bbox': [.1, .1, .8, .5]})
+        self.assertEqual(response.status_code, 200, response.json)
+        saved = review.load_review(self.job)
+        self.assertIn('![](img:', saved['questions']['0-0']['solutionOverride'])
+        self.assertNotIn('stemOverride', saved['questions']['0-0'])
+
+    def test_scanned_page_audit_adds_only_missing_questions_and_is_repeatable(self):
+        path = self.job / 'out' / 'structured.json'
+        doc = json.loads(path.read_text(encoding='utf-8'))
+        doc['page_sizes'] = {'1': [600, 800]}
+        doc['scanned_pages'] = [1]
+        doc['exercises'][0]['questions'][0].update(label='1', page_start=1)
+        doc['exercises'][0]['questions'][0]['regions'] = [{'page': 1, 'bbox': [10, 20, 100, 80]}]
+        path.write_text(json.dumps(doc), encoding='utf-8')
+        found = [
+            {'number': 1, 'question': 'Already extracted', 'solution': '2', 'bbox': [.1, .1, .8, .3]},
+            {'number': 2, 'exercise': 'Exercise 1', 'question': 'Describe this.\n[[FIGURE]]',
+             'solution': 'Answer: yes', 'bbox': [.2, .3, .9, .8]},
+        ]
+        with patch.object(review, 'region_png', return_value=b'original PDF region'), \
+             patch('ai_fallback.transcribe_page_questions', return_value=found) as ai:
+            first = review.ai_recover_missing_questions(self.job)
+            second = review.ai_recover_missing_questions(self.job)
+        self.assertEqual((first['added'], second['added']), (1, 0))
+        self.assertEqual(ai.call_count, 2)
+        saved = review.load_review(self.job)
+        self.assertEqual(len(saved['addedQuestions']), 1)
+        recovered = saved['addedQuestions'][0]
+        self.assertEqual(recovered['number'], 2)
+        self.assertEqual(saved['questions'][f"add-{recovered['id']}"]['flagged'], True)
+        self.assertEqual(len(saved['manualImages']), 1)
+        self.assertIn('![](img:', recovered['stem'])
+        with patch.object(review, '_reread_one', return_value={
+            'stemOverride': 'Read question 1', 'solutionOverride': '2',
+            'aiReread': True, 'katexErrors': []}) as reread:
+            review.ai_reread_all(self.job, workers=1)
+        self.assertEqual(reread.call_count, 1)
+        self.assertIn('![](img:', review.load_review(self.job)['addedQuestions'][0]['stem'])
+
     def test_ai_image_conversion_failure_keeps_question_unchanged(self):
         saved = review.load_review(self.job)
         doc = json.loads((self.job / 'out' / 'structured.json').read_text(encoding='utf-8'))
