@@ -82,18 +82,23 @@ class WorkflowTests(unittest.TestCase):
         image.write_bytes(b'original crop')
         before = path.read_bytes()
         with patch('ai_fallback.available', return_value=True), \
+                patch.object(review, 'region_png', return_value=b'selected PDF area') as crop, \
                 patch('ai_fallback.transcribe_region', return_value={
                     'question': '', 'solution': r'\(6 \times 5 = 30\)', 'katexErrors': []}) as ai:
             response = self.client.post('/api/jobs/abc123/questions/0-0/image-text',
-                                        json={'part': 'sol', 'name': image.name})
+                                        json={'part': 'sol', 'name': image.name, 'page': 1,
+                                              'bbox': [.02, .03, .2, .08]})
         self.assertEqual(response.status_code, 200, response.json)
         self.assertEqual(response.json['text'], r'Before \(6 \times 5 = 30\) after ![](img:p001_eq001.png)')
-        ai.assert_called_once_with(b'original crop', part='sol')
+        ai.assert_called_once_with(b'selected PDF area', part='sol')
+        crop.assert_called_once_with(self.job / 'input.pdf',
+                                     [{'page': 1, 'bbox': [12.0, 24.0, 120.0, 64.0]}], pad=0)
         saved = review.load_review(self.job)
         self.assertNotIn('stemOverride', saved['questions']['0-0'])
         source = saved['questions']['0-0']['imageReadings'][0]
         self.assertEqual(source['page'], 1)
         self.assertEqual(source['bbox'], [.0167, .025, .1667, .05])
+        self.assertEqual(source['selectionBBox'], [.02, .03, .2, .08])
         self.assertEqual(path.read_bytes(), before)
         self.assertEqual(image.read_bytes(), b'original crop')
         body = {k: saved[k] for k in ('document', 'questions')}
@@ -102,16 +107,22 @@ class WorkflowTests(unittest.TestCase):
 
     def test_ai_image_conversion_failure_keeps_question_unchanged(self):
         saved = review.load_review(self.job)
+        doc = json.loads((self.job / 'out' / 'structured.json').read_text(encoding='utf-8'))
+        doc['page_sizes'] = {'1': [600, 800]}
+        doc['image_boxes'] = {'p001_eq000.png': {'page': 1, 'bbox': [10, 20, 100, 40]}}
+        (self.job / 'out' / 'structured.json').write_text(json.dumps(doc), encoding='utf-8')
         saved['questions']['0-0'] = {'stemOverride': 'Before ![](img:p001_eq000.png) after'}
         review.save_review(self.job, saved)
         (self.job / 'out' / 'images' / 'p001_eq000.png').write_bytes(b'crop')
         before = (self.job / 'review.json').read_bytes()
         for text, errors in [('[[FIGURE]]', []), ('', []), (r'\(broken\)', ['invalid'])]:
             with patch('ai_fallback.available', return_value=True), \
+                    patch.object(review, 'region_png', return_value=b'selected PDF area'), \
                     patch('ai_fallback.transcribe_region', return_value={
                         'question': text, 'solution': '', 'katexErrors': errors}):
                 response = self.client.post('/api/jobs/abc123/questions/0-0/image-text',
-                                            json={'part': 'stem', 'name': 'p001_eq000.png'})
+                                            json={'part': 'stem', 'name': 'p001_eq000.png',
+                                                  'page': 1, 'bbox': [.02, .03, .2, .08]})
             self.assertEqual(response.status_code, 400)
             self.assertEqual((self.job / 'review.json').read_bytes(), before)
 

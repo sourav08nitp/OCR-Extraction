@@ -1010,8 +1010,8 @@ def extract_region(job_dir, key, part, page, bbox_norm):
     return {"field": field, "text": manual[field], "katexErrors": result["katexErrors"], "missingFigures": missing_figures}
 
 
-def transcribe_question_image(job_dir, key, part, name):
-    """Replace just one image occurrence, retaining the crop and its PDF location."""
+def transcribe_question_image(job_dir, key, part, name, page, bbox_norm):
+    """Read a selected PDF area and replace only the chosen image reference."""
     import ai_fallback
 
     if part not in ("stem", "sol") or not isinstance(name, str) or Path(name).name != name or not name.endswith(".png"):
@@ -1028,10 +1028,23 @@ def transcribe_question_image(job_dir, key, part, name):
     original = auto[automatic] if original is None else original
     if token not in original:
         raise ValueError("This image is no longer in the selected question part")
+    boxes = {**doc.get("image_boxes", {}), **saved["manualImages"]}
+    box = boxes.get(name)
+    sizes = {int(p): size for p, size in doc.get("page_sizes", {}).items()}
+    if not box or page not in sizes or page != box["page"]:
+        raise ValueError("Select an area on the image's PDF page")
+    if (not isinstance(bbox_norm, (list, tuple)) or len(bbox_norm) != 4 or
+            any(not isinstance(v, (int, float)) or not 0 <= v <= 1 for v in bbox_norm) or
+            bbox_norm[2] - bbox_norm[0] < .005 or bbox_norm[3] - bbox_norm[1] < .005):
+        raise ValueError("Draw a valid PDF box around the content")
+    w, h = sizes[page]
+    selection = [round(bbox_norm[0] * w, 1), round(bbox_norm[1] * h, 1),
+                 round(bbox_norm[2] * w, 1), round(bbox_norm[3] * h, 1)]
     path = job_dir / "out" / "images" / name
     if not path.is_file():
         raise ValueError("The source image is missing")
-    result = ai_fallback.transcribe_region(path.read_bytes(), part=part)
+    result = ai_fallback.transcribe_region(
+        region_png(job_dir / "input.pdf", [{"page": page, "bbox": selection}], pad=0), part=part)
     text = "\n".join(t.strip() for t in (result["question"], result["solution"]) if t.strip())
     if not text or "[[FIGURE]]" in text:
         raise ValueError("AI could not convert this picture to text; the image was kept")
@@ -1045,11 +1058,9 @@ def transcribe_question_image(job_dir, key, part, name):
     if current != original:
         raise ValueError("The question changed while AI was reading; try again")
     manual[field] = current.replace(token, text, 1)
-    box = {**doc.get("image_boxes", {}), **saved["manualImages"]}.get(name, {})
-    page = box.get("page")
-    size = doc.get("page_sizes", {}).get(str(page)) or doc.get("page_sizes", {}).get(page)
     reading = {"name": name, "part": "question" if part == "stem" else "solution", "text": text,
-               "page": page, "bbox": _norm_bbox(box["bbox"], size) if size and box.get("bbox") else None}
+               "page": page, "bbox": _norm_bbox(box["bbox"], sizes[page]),
+               "selectionBBox": bbox_norm}
     readings = [r for r in manual.get("imageReadings", []) if (r.get("name"), r.get("part")) != (name, reading["part"])]
     manual["imageReadings"] = readings + [reading]
     save_review(job_dir, saved)

@@ -196,7 +196,7 @@ function renderRich(text, part, sources = []) {
     if (m) {
       const img = `<img src="${esc(imgSrc(m[1]))}" alt="image" loading="lazy">`;
       const convert = part && m[1].startsWith("img:") && data.aiAvailable
-        ? `<button class="ghost image-ai" data-act="image-ai" data-part="${part}" data-name="${esc(m[1].slice(4))}" ${imageBusy ? 'disabled' : ''} title="Replace only this image with AI-read text and maths">${imageBusy?.name === m[1].slice(4) ? 'Reading image…' : '✨ Image → text with AI'}</button>` : '';
+        ? `<button class="ghost image-ai" data-act="image-ai" data-part="${part}" data-name="${esc(m[1].slice(4))}" ${imageBusy ? 'disabled' : ''} title="Draw a PDF box; AI replaces only this image with text and maths">${imageBusy?.name === m[1].slice(4) ? 'Reading selected area…' : '✨ Select PDF area → AI text'}</button>` : '';
       return part ? `<span class="imgwrap">${img}<button class="rm" data-act="rm" data-part="${part}" data-ref="${esc(m[1])}" title="Remove this image from the question">✕</button>${convert}</span>` : img;
     }
     return esc(p).replace(/\n/g, "<br>");
@@ -375,6 +375,24 @@ function startCrop(key, part) {
   $("cropHint").hidden = false;
   $("cropHint").textContent = `Drag a box on the PDF to add it to the ${part === "stem" ? "question" : "answer"} — Esc to cancel`;
 }
+async function startImageCrop(key, part, name) {
+  if (imageBusy || cropMode) return;
+  stashTextEdit(); clearTimeout(saveTimer);
+  if (!await save()) return;
+  const q = data.questions.find(q => q.key === key);
+  const manual = (data.manualImages || {})[name];
+  const size = manual && data.pageSizes?.[manual.page];
+  const manualSource = manual ? {name, page: manual.page, bbox: size
+    ? [manual.bbox[0] / size[0], manual.bbox[1] / size[1], manual.bbox[2] / size[0], manual.bbox[3] / size[1]] : null} : null;
+  const source = [...(q.auto.imageCrops || []), ...(q.auto.sourceImages || []), manualSource]
+    .filter(Boolean).find(item => item.name === name || item.file === name);
+  if (source?.page) await showPage(source.page, source.bbox ? [source] : undefined);
+  cropMode = {key, part, name, imageText: true};
+  $("pageWrap").classList.add("cropping");
+  $("cropHint").hidden = false;
+  $("cropHint").textContent = `Step 2/3: Drag over the text or formula on the PDF for Q${q.auto.label}. Release to run AI. Esc cancels.`;
+  toast("Step 1/3: Select the desired content on the PDF at left");
+}
 function startAddQuestion() {
   cropMode = { add: true };
   $("pageWrap").classList.add("cropping");
@@ -423,10 +441,11 @@ $("pageWrap").addEventListener("mousedown", e => {
     const b = box.getBoundingClientRect();
     const bbox = [(b.left - rect.left) / rect.width, (b.top - rect.top) / rect.height,
                   (b.right - rect.left) / rect.width, (b.bottom - rect.top) / rect.height];
-    const { key, part, add, extract } = selection;
+    const { key, part, add, extract, imageText, name } = selection;
     endCrop();
     if (b.width < 8 || b.height < 8) { toast("That selection was too small"); return; }
     if (add) return addQuestionFromBox(bbox, selectedPage);
+    if (imageText) return imageTextFromBox(key, part, name, bbox, selectedPage);
     if (extract) return extractFromBox(key, part, bbox, selectedPage);
     try {
       const r = await fetch(`/api/jobs/${jobId}/questions/${key}/crop`, {
@@ -490,6 +509,25 @@ async function extractFromBox(key, part, bbox, page) {
   } catch (e) { toast('Could not extract: ' + e.message); }
   extractBusy = null;
   drawQuestions({ anchorKey: key });
+}
+
+async function imageTextFromBox(key, part, name, bbox, page) {
+  imageBusy = {key, name};
+  drawQuestions({anchorKey: key});
+  toast("Step 3/3: AI is reading the selected PDF area…");
+  try {
+    const r = await fetch(`/api/jobs/${jobId}/questions/${encodeURIComponent(key)}/image-text`, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({part, name, page, bbox})});
+    const result = await r.json();
+    if (!r.ok) throw new Error(result.error || r.statusText);
+    const q = data.questions.find(q => q.key === key);
+    q.manual[result.field] = result.text;
+    q.manual.imageReadings = result.imageReadings;
+    toast("AI text added — check it against the original image");
+  } catch (err) { toast("Image conversion failed: " + err.message); }
+  imageBusy = null;
+  drawQuestions({anchorKey: key});
 }
 
 async function deleteAddedQuestion(key) {
@@ -878,22 +916,8 @@ async function questionAction(btn) {
     else toast("The original crop is saved, but its PDF position is unavailable");
     return;
   } else if (a === "image-ai") {
-    if (imageBusy) return;
-    stashTextEdit(); clearTimeout(saveTimer);
-    if (!await save()) return;
-    imageBusy = {key: q.key, name: btn.dataset.name};
-    drawQuestions({ anchorKey: q.key });
-    try {
-      const r = await fetch(`/api/jobs/${jobId}/questions/${q.key}/image-text`, {
-        method: "POST", headers: {"Content-Type": "application/json"},
-        body: JSON.stringify({part: btn.dataset.part, name: btn.dataset.name})});
-      const result = await r.json();
-      if (!r.ok) throw new Error(result.error || r.statusText);
-      q.manual[result.field] = result.text;
-      q.manual.imageReadings = result.imageReadings;
-      toast("Image converted — check the text against its original crop");
-    } catch (err) { toast("Image conversion failed: " + err.message); }
-    imageBusy = null;
+    await startImageCrop(q.key, btn.dataset.part, btn.dataset.name);
+    return;
   } else if (a === "rm") {
     // remove one image from the question or solution; the text becomes "edited"
     const field = btn.dataset.part === "stem" ? "stemOverride" : "solutionOverride";

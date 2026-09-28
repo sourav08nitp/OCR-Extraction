@@ -274,6 +274,7 @@ def _review_payload(job_id):
         name, saved["document"].get("subject"), review.detect_class(job_dir))
     return {
         "document": saved["document"],
+        "manualImages": saved["manualImages"],
         "documentOptions": review.document_options(JOBS_DIR),
         "workflow": review.workflow_status(job_dir),
         "syllabus": {k: v["topics"] for k, v in syl.items()},
@@ -459,10 +460,12 @@ def job_question_image_text(job_id, key):
         return jsonify(error="OPENAI_API_KEY_2 is not set on the server"), 400
     body = request.get_json(silent=True) or {}
     try:
-        return jsonify(review.transcribe_question_image(JOBS_DIR / job_id, key, body.get("part"), body.get("name")))
+        return jsonify(review.transcribe_question_image(JOBS_DIR / job_id, key, body.get("part"),
+                                                        body.get("name"), int(body.get("page", 0)),
+                                                        body.get("bbox")))
     except KeyError:
         abort(404)
-    except ValueError as e:
+    except (ValueError, TypeError) as e:
         return jsonify(error=str(e)), 400
     except Exception as e:
         return jsonify(error=f"AI image conversion failed: {e}"[:300]), 502
