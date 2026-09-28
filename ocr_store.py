@@ -83,6 +83,31 @@ def ingest_drive_file_id(document_id):
     return file_id if isinstance(file_id, str) and file_id and not file_id.startswith("local:") else None
 
 
+def ingest_session_ids(document_ids):
+    """Map pushed document IDs to existing, active ingest sessions in one database read."""
+    from bson import ObjectId
+
+    ids = []
+    for value in document_ids:
+        try:
+            ids.append(ObjectId(str(value)))
+        except (TypeError, ValueError):
+            continue
+    if not ids:
+        return {}
+    database = _database()
+    documents = list(database["ingest_documents"].find(
+        {"_id": {"$in": ids}}, {"sessionId": 1}))
+    linked = {str(row["_id"]): row["sessionId"] for row in documents
+              if isinstance(row.get("sessionId"), ObjectId)}
+    if not linked:
+        return {}
+    active = {row["_id"] for row in database["ingest_sessions"].find(
+        {"_id": {"$in": list(linked.values())}, "deletedAt": None}, {"_id": 1})}
+    return {document_id: str(session_id) for document_id, session_id in linked.items()
+            if session_id in active}
+
+
 def update_session(session_id, **fields):
     database = _database()
     fields["updatedAt"] = datetime.now(timezone.utc)

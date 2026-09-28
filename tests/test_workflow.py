@@ -64,6 +64,21 @@ class WorkflowTests(unittest.TestCase):
             tree = self.client.get('/api/ocr/projects').json
         self.assertEqual(tree['localJobs'], [{'id': 'old123', 'label': 'Old chapter.pdf'}])
 
+    def test_pushed_job_shows_its_linked_ingest_session_id(self):
+        import os
+
+        saved = review.load_review(self.job)
+        saved['document']['documentId'] = '0123456789abcdef01234567'
+        review.save_review(self.job, saved)
+        with patch.object(review, 'workflow_status', return_value={'stage': 'pushed'}), \
+             patch('ocr_store.ingest_session_ids', return_value={
+                 '0123456789abcdef01234567': 'abcdef0123456789abcdef01'}) as lookup, \
+             patch.dict(os.environ, {'MONGODB_URI': 'mock://test'}):
+            response = self.client.get('/api/jobs')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json['jobs'][0]['ingestSessionId'], 'abcdef0123456789abcdef01')
+        self.assertEqual(list(lookup.call_args.args[0]), ['0123456789abcdef01234567'])
+
     def test_import_legacy_pdf_reuses_drive_id_and_preserves_review(self):
         legacy = self.root / 'legacy' / 'old123'
         (legacy / 'out').mkdir(parents=True)

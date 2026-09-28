@@ -323,6 +323,7 @@ def list_jobs():
             "id": d.name,
             "legacy": d.parent == LEGACY_JOBS_DIR,
             "sessionId": live.get("sessionId") or meta.get("sessionId"),
+            "ingestSessionId": None,
             "projectId": live.get("projectId") or meta.get("projectId"),
             "driveFileId": live.get("driveFileId") or meta.get("driveFileId"),
             "filename": live.get("filename") or meta.get("filename") or "input.pdf",
@@ -334,6 +335,24 @@ def list_jobs():
             "workflow": review.workflow_status(d) if has_result else {"stage": "review"},
             "uploadedAt": (meta_path if meta_path.is_file() else source_link).stat().st_mtime,
         })
+    pushed = [job for job in out if job["workflow"].get("stage") == "pushed"]
+    if pushed and os.environ.get("MONGODB_URI"):
+        try:
+            import ocr_store
+            document_ids = {}
+            for job in pushed:
+                try:
+                    document_id = review.load_review(_job_dir(job["id"]))["document"].get("documentId")
+                except (OSError, ValueError, json.JSONDecodeError):
+                    continue
+                if document_id:
+                    document_ids[job["id"]] = document_id
+            linked = ocr_store.ingest_session_ids(document_ids.values())
+            for job in pushed:
+                job["ingestSessionId"] = linked.get(document_ids.get(job["id"]))
+        except Exception:
+            # The local job list still works while MongoDB is temporarily unavailable.
+            app.logger.exception("Could not load linked ingest session IDs")
     out.sort(key=lambda j: j["uploadedAt"], reverse=True)
     return jsonify(jobs=out)
 

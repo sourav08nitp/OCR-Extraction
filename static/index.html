@@ -904,10 +904,11 @@ async function drawJobList() {
         : workflow.stage === 'pushed' ? '<br><small>✓ Pushed to database</small>'
         : workflow.previouslyFinalized ? '<br><small>Changed — finalize again</small>' : '';
       const session = j.sessionId ? `<br><small title="This OCR review session is separate from the ingest app's session ID">OCR session: ${esc(j.sessionId)}${j.projectId ? ` · Project: ${esc(j.projectId)}` : ''}</small>` : '';
+      const ingestSession = j.ingestSessionId ? `<br><small title="Use this ID to open the linked session in the ingest app">Ingest session: ${esc(j.ingestSessionId)}</small>` : '';
       const drive = j.driveFileId
         ? '<small class="drive-state linked" title="This job has a Google Drive file ID">✓ Drive file linked</small>'
         : '<small class="drive-state" title="This job has no saved Google Drive file ID; a PDF elsewhere in Drive is not automatically linked">Drive link missing</small>';
-      return `<tr><td class="name">${esc(j.filename)}${session}${drive}${detail}</td><td class="state">${state}</td>
+      return `<tr><td class="name">${esc(j.filename)}${session}${ingestSession}${drive}${detail}</td><td class="state">${state}</td>
         <td class="links">${workflow.stage === 'ready' && mongo.available ? `<button class="ghost" data-push="${j.id}">⬆ Push to database</button> ` : ''}${j.hasResult ? `<a href="#job=${j.id}">Results</a> · <a href="/review#job=${j.id}">Review</a> · ` : ""}${
           canDelete ? `<a class="del" data-del="${j.id}" data-name="${esc(j.filename)}" data-q="${j.questions ?? ""}" title="Delete this PDF and everything extracted from it">Delete</a>` : ""}</td></tr>`;
     }).join("")}</tbody></table>`;
