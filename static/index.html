@@ -404,7 +404,8 @@ async function loadProjects() {
   const projectMenu = p => `<details class="more-menu"><summary title="Project options">•••</summary><div class="menu-pop"><button data-rename-project="${esc(p.id)}" data-project-label="${esc(p.label)}">Rename</button><button class="danger" data-delete-project="${esc(p.id)}" data-project-label="${esc(p.label)}">Delete</button></div></details>`;
   const folders = data.projects.map(p => `<div class="project"><div class="project-row"><div class="project-name">📁 ${esc(p.label)}</div>${projectMenu(p)}</div><div class="project-sessions">${sessions(byProject.get(p.id)) || '<span class="hint">Empty</span>'}</div></div>`).join('');
   const localJobs = data.localJobs || [];
-  const legacyFolder = localJobs.length ? `<div class="project"><div class="project-row"><div class="project-name">Local PDF jobs (${localJobs.length})</div></div><div class="project-sessions">${localJobs.map(j => `<div class="project-session"><a href="#job=${esc(j.id)}" title="${esc(j.label)}">${esc(j.label)}</a> <a href="/review#job=${esc(j.id)}" title="Review ${esc(j.label)}">Review</a></div>`).join('')}</div></div>` : '';
+  const canUpload = Boolean(data.driveConfigured);
+  const legacyFolder = localJobs.length ? `<div class="project"><div class="project-row"><div class="project-name">Local PDF jobs (${localJobs.length})</div><button class="ghost" id="importAllSessions" type="button" style="margin-left:auto;padding:3px 7px;font-size:11px" ${canUpload ? '' : 'disabled title="Configure Google Drive and restart the server"'}>Upload all</button></div>${canUpload ? '' : '<div class="hint">Configure Google Drive to upload these PDFs as sessions.</div>'}<div class="project-sessions">${localJobs.map(j => `<div class="project-session"><a href="#job=${esc(j.id)}" title="${esc(j.label)}">${esc(j.label)}</a> <a href="/review#job=${esc(j.id)}" title="Review ${esc(j.label)}">Review</a><details class="more-menu"><summary title="Local job options">•••</summary><div class="menu-pop"><button data-import-session="${esc(j.id)}" data-job-label="${esc(j.label)}" ${canUpload ? '' : 'disabled title="Configure Google Drive and restart the server"'}>Upload to sessions</button></div></details></div>`).join('')}</div></div>` : '';
   $("projectTree").innerHTML = folders + (unfiled.length ? `<div class="project"><div class="project-row"><div class="project-name">Unfiled sessions</div></div><div class="project-sessions">${sessions(unfiled)}</div></div>` : '') + legacyFolder || '<span class="hint">Create a project to organize sessions.</span>';
   $("projectTree").querySelectorAll("[data-move-session]").forEach(select => select.onchange = async () => {
     const r = await fetch(`/api/sessions/${encodeURIComponent(select.dataset.moveSession)}/project`, {
@@ -413,6 +414,35 @@ async function loadProjects() {
     const result = await r.json();
     if (!r.ok) { alert(result.error || "Could not move session"); return; }
     await loadProjects();
+  });
+  const importOne = async id => {
+    const r = await fetch(`/api/jobs/${encodeURIComponent(id)}/import-session`, {method: "POST"});
+    const result = await r.json();
+    if (!r.ok) throw new Error(result.error || "Could not upload PDF");
+  };
+  $("importAllSessions")?.addEventListener("click", async event => {
+    const button = event.currentTarget;
+    button.disabled = true;
+    const failures = [];
+    for (const [index, job] of localJobs.entries()) {
+      button.textContent = `Uploading ${index + 1}/${localJobs.length}…`;
+      try { await importOne(job.id); }
+      catch (e) { failures.push(`${job.label}: ${e.message}`); }
+    }
+    await loadProjects();
+    if (failures.length) alert(`${failures.length} PDF(s) could not be uploaded:\n${failures.join('\n')}`);
+  });
+  $("projectTree").querySelectorAll("[data-import-session]").forEach(button => button.onclick = async () => {
+    button.disabled = true;
+    button.textContent = "Uploading PDF…";
+    try {
+      await importOne(button.dataset.importSession);
+      await loadProjects();
+    } catch (e) {
+      alert(e.message);
+      button.disabled = false;
+      button.textContent = "Upload to sessions";
+    }
   });
   $("projectTree").querySelectorAll("[data-rename-session]").forEach(button => button.onclick = async () => {
     const label = prompt("Session name", button.dataset.sessionLabel);

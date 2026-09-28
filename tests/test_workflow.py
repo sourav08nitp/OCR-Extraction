@@ -64,6 +64,76 @@ class WorkflowTests(unittest.TestCase):
             tree = self.client.get('/api/ocr/projects').json
         self.assertEqual(tree['localJobs'], [{'id': 'old123', 'label': 'Old chapter.pdf'}])
 
+    def test_import_legacy_pdf_reuses_drive_id_and_preserves_review(self):
+        legacy = self.root / 'legacy' / 'old123'
+        (legacy / 'out').mkdir(parents=True)
+        (legacy / 'input.pdf').write_bytes(b'%PDF-original local source')
+        (legacy / 'out' / 'structured.json').write_bytes((self.job / 'out' / 'structured.json').read_bytes())
+        (legacy / 'meta.json').write_text(json.dumps({'filename': 'Old chapter.pdf', 'questions': 1}), encoding='utf-8')
+        saved = review.load_review(self.job)
+        saved['questions']['0-0'] = {'stemOverride': 'My corrected question'}
+        review.save_review(legacy, saved)
+        original_review = (legacy / 'review.json').read_bytes()
+        original_signature = review.review_signature(legacy)
+        session = None
+
+        def ensure(session_id, label, drive_file_id):
+            nonlocal session
+            session = {'_id': session_id, 'label': label, 'driveFileId': drive_file_id, 'projectId': None}
+            return session
+
+        with patch('drive_store.configured', return_value=True), \
+             patch('drive_store.upload_pdf', return_value='drive-123') as upload, \
+             patch('ocr_store.get_session', side_effect=lambda _: session), \
+             patch('ocr_store.ingest_drive_file_id', return_value=None), \
+             patch('ocr_store.ensure_imported_session', side_effect=ensure) as register:
+            first = self.client.post('/api/jobs/old123/import-session')
+            second = self.client.post('/api/jobs/old123/import-session')
+        self.assertEqual(first.status_code, 200, first.json)
+        self.assertEqual(second.status_code, 200, second.json)
+        self.assertEqual(first.json['sessionId'], 'old123')
+        self.assertEqual(upload.call_count, 1)
+        self.assertEqual(register.call_count, 2)
+        self.assertEqual((legacy / 'input.pdf').read_bytes(), b'%PDF-original local source')
+        self.assertEqual((legacy / 'review.json').read_bytes(), original_review)
+        self.assertEqual(review.review_signature(legacy), original_signature)
+        self.assertEqual(json.loads((legacy / 'meta.json').read_text())['driveFileId'], 'drive-123')
+        with patch('ocr_store.project_tree', return_value={'projects': [], 'sessions': [{'id': 'old123'}]}):
+            self.assertEqual(self.client.get('/api/ocr/projects').json['localJobs'], [])
+
+    def test_import_legacy_pdf_uses_existing_ingest_drive_pdf(self):
+        legacy = self.root / 'legacy' / 'old123'
+        (legacy / 'out').mkdir(parents=True)
+        (legacy / 'input.pdf').write_bytes(b'%PDF-original local source')
+        (legacy / 'out' / 'structured.json').write_bytes((self.job / 'out' / 'structured.json').read_bytes())
+        (legacy / 'meta.json').write_text(json.dumps({'filename': 'Old chapter.pdf'}), encoding='utf-8')
+        saved = review.load_review(self.job)
+        saved['document']['documentId'] = '0123456789abcdef01234567'
+        review.save_review(legacy, saved)
+        with patch('drive_store.configured', return_value=True), \
+             patch('drive_store.upload_pdf') as upload, \
+             patch('ocr_store.get_session', return_value=None), \
+             patch('ocr_store.ingest_drive_file_id', return_value='existing-drive') as lookup, \
+             patch('ocr_store.ensure_imported_session', return_value={
+                 'label': 'Old chapter.pdf', 'driveFileId': 'existing-drive', 'projectId': None}):
+            response = self.client.post('/api/jobs/old123/import-session')
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.json['driveFileId'], 'existing-drive')
+        lookup.assert_called_once_with('0123456789abcdef01234567')
+        upload.assert_not_called()
+
+    def test_import_without_drive_config_leaves_local_job_untouched(self):
+        legacy = self.root / 'legacy' / 'old123'
+        (legacy / 'out').mkdir(parents=True)
+        (legacy / 'input.pdf').write_bytes(b'%PDF-original local source')
+        (legacy / 'out' / 'structured.json').write_bytes((self.job / 'out' / 'structured.json').read_bytes())
+        (legacy / 'meta.json').write_text(json.dumps({'filename': 'Old chapter.pdf'}), encoding='utf-8')
+        with patch('drive_store.configured', return_value=False):
+            response = self.client.post('/api/jobs/old123/import-session')
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual((legacy / 'input.pdf').read_bytes(), b'%PDF-original local source')
+        self.assertNotIn('driveFileId', json.loads((legacy / 'meta.json').read_text()))
+
     def test_duplicate_image_cleanup_preserves_edits_and_source_files(self):
         path = self.job / 'out' / 'structured.json'
         original = path.read_bytes()

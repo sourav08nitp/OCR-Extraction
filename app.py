@@ -68,6 +68,7 @@ jobs = {}              # job_id -> status dict
 work = queue.Queue()   # one worker: pix2tex is heavy and the model is shared
 _model = None
 _image_edit_lock = threading.Lock()
+_session_import_lock = threading.Lock()
 
 
 def _get_model(job):
@@ -534,8 +535,8 @@ def session_delete(session_id):
         removed = ocr_store.delete_session(session_id)
         if not removed:
             return jsonify(error="OCR session not found"), 404
-        # Session workspaces live only under the system temp directory.
-        if (_job_dir(session_id)).is_dir():
+        # Imported older jobs remain local if their session is removed.
+        if (_job_dir(session_id)).is_dir() and _job_dir(session_id) != LEGACY_JOBS_DIR / session_id:
             _discard_source(session_id, jobs.get(session_id))
             shutil.rmtree(_job_dir(session_id))
         jobs.pop(session_id, None)
@@ -750,6 +751,7 @@ def mongo_status():
 
 @app.get("/api/ocr/projects")
 def ocr_projects():
+    import drive_store
     local_jobs = []
     if LEGACY_JOBS_DIR.is_dir():
         for d in LEGACY_JOBS_DIR.iterdir():
@@ -760,10 +762,65 @@ def ocr_projects():
     local_jobs.sort(key=lambda j: j["label"].casefold())
     try:
         import ocr_store
-        return jsonify({**ocr_store.project_tree(), "localJobs": local_jobs})
+        tree = ocr_store.project_tree()
+        imported_ids = {session["id"] for session in tree["sessions"]}
+        return jsonify({**tree, "driveConfigured": drive_store.configured(),
+                        "localJobs": [job for job in local_jobs if job["id"] not in imported_ids]})
     except Exception as e:
         return jsonify(projects=[], sessions=[], localJobs=local_jobs,
+                       driveConfigured=drive_store.configured(),
                        warning=f"Could not load OCR projects: {e}")
+
+
+@app.post("/api/jobs/<job_id>/import-session")
+def job_import_session(job_id):
+    """Move a pre-session PDF into Drive/OCR sessions without re-extracting its review."""
+    job = _job_or_404(job_id)
+    job_dir = _job_dir(job_id)
+    if job_dir != LEGACY_JOBS_DIR / job_id:
+        return jsonify(error="This job already uses the session workflow"), 400
+    if job["status"] != "done":
+        return jsonify(error="Wait for extraction to finish before importing"), 409
+    source = job_dir / "input.pdf"
+    if not source.is_file():
+        return jsonify(error="The original local PDF is missing"), 400
+    import drive_store
+    if not drive_store.configured():
+        return jsonify(error="Google Drive is not configured on this server"), 400
+    try:
+        import ocr_store
+        with _session_import_lock:
+            meta = _meta(job_id)
+            saved = review.load_review(job_dir)
+            document = saved["document"]
+            existing = ocr_store.get_session(job_id)
+            drive_file_id = ((existing or {}).get("driveFileId") or meta.get("driveFileId")
+                             or document.get("driveFileId"))
+            if not drive_file_id or str(drive_file_id).startswith("local:"):
+                drive_file_id = ocr_store.ingest_drive_file_id(document.get("documentId"))
+            if not drive_file_id:
+                drive_file_id = drive_store.upload_pdf(
+                    source, meta.get("filename") or job.get("filename") or "input.pdf",
+                    exam=document.get("exam"), subject=document.get("subject"),
+                    module=document.get("module"), chapter=document.get("chapter"),
+                )
+            # Save the Drive id first, so a failed Mongo registration can be retried
+            # without uploading another copy of the PDF.
+            meta["driveFileId"] = drive_file_id
+            _save_meta(job_id, meta)
+            session = ocr_store.ensure_imported_session(
+                job_id, f"OCR · {meta.get('filename') or job.get('filename') or 'input.pdf'}",
+                drive_file_id)
+            drive_file_id = session.get("driveFileId") or drive_file_id
+            meta["driveFileId"] = drive_file_id
+            meta["sessionId"] = job_id
+            meta["projectId"] = session.get("projectId")
+            _save_meta(job_id, meta)
+        return jsonify(sessionId=job_id, driveFileId=drive_file_id,
+                       label=session.get("label"), projectId=session.get("projectId"))
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(error=f"Could not import PDF as an OCR session: {e}"[:300]), 502
 
 
 @app.post("/api/ocr/projects")

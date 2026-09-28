@@ -47,6 +47,42 @@ def create_session(session_id, label, *, project_id=None, drive_file_id=None):
     _invalidate_tree()
 
 
+def get_session(session_id):
+    """Read one OCR session without relying on the short-lived sidebar cache."""
+    return _database()[SESSIONS].find_one({"_id": session_id})
+
+
+def ensure_imported_session(session_id, label, drive_file_id):
+    """Register a legacy job once; keep any existing name and project assignment."""
+    database = _database()
+    now = datetime.now(timezone.utc)
+    database[SESSIONS].update_one({"_id": session_id}, {"$setOnInsert": {
+        "_id": session_id, "label": label, "projectId": None,
+        "driveFileId": drive_file_id, "status": "ready",
+        "createdAt": now, "updatedAt": now,
+    }}, upsert=True)
+    existing = database[SESSIONS].find_one({"_id": session_id})
+    if not existing.get("driveFileId"):
+        update_session(session_id, driveFileId=drive_file_id)
+    _invalidate_tree()
+    return database[SESSIONS].find_one({"_id": session_id})
+
+
+def ingest_drive_file_id(document_id):
+    """Reuse the Drive PDF already attached to a pushed legacy document, if any."""
+    if not document_id:
+        return None
+    from bson import ObjectId
+    try:
+        object_id = ObjectId(document_id)
+    except (TypeError, ValueError):
+        return None
+    document = _database()["ingest_documents"].find_one(
+        {"_id": object_id}, {"driveFileId": 1})
+    file_id = (document or {}).get("driveFileId")
+    return file_id if isinstance(file_id, str) and file_id and not file_id.startswith("local:") else None
+
+
 def update_session(session_id, **fields):
     database = _database()
     fields["updatedAt"] = datetime.now(timezone.utc)
