@@ -41,6 +41,7 @@
   .project-sessions { margin: 4px 0 0 8px; padding-left: 8px; border-left: 1px solid var(--line); }
   .project-session { display:flex; align-items:center; gap:4px; color:var(--muted); font-size:12px; padding:3px 4px; border-radius:6px; }
   .project-session a { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-decoration:none; color:var(--accent); }
+  .project-session .drive-state { flex:none; color:var(--accent); font:10px system-ui,sans-serif; white-space:nowrap; }
   .more-menu { position:relative; margin-left:auto; opacity:0; }
   .project-row:hover .more-menu, .project-session:hover .more-menu, .more-menu[open] { opacity:1; }
   .more-menu summary { list-style:none; cursor:pointer; width:24px; height:24px; display:grid; place-items:center; border-radius:5px; color:var(--muted); font-weight:900; letter-spacing:1px; }
@@ -79,6 +80,8 @@
   table.jobs td { padding: 7px 10px; border-top: 1px solid var(--line); }
   table.jobs tr:first-child td { border-top: 0; }
   table.jobs .name { max-width: 300px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  table.jobs .drive-state { display:block; color:var(--muted); font:11px system-ui,sans-serif; }
+  table.jobs .drive-state.linked { color:var(--accent); }
   table.jobs .state { color: var(--muted); white-space: nowrap; }
   table.jobs a.del { color: var(--err); cursor: pointer; }
   table.jobs .links { text-align: right; white-space: nowrap; }
@@ -412,7 +415,7 @@ async function loadProjects() {
     .map(p => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('');
   const moveMenu = s => `<select data-move-session="${esc(s.id)}" title="Move to project"><option value="">Unfiled</option>${data.projects.map(p => `<option value="${esc(p.id)}" ${s.projectId === p.id ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select>`;
   const sessionMenu = s => `<details class="more-menu"><summary title="Session options">•••</summary><div class="menu-pop">${moveMenu(s)}<button data-rename-session="${esc(s.id)}" data-session-label="${esc(s.label)}">Rename</button><button class="danger" data-delete-session="${esc(s.id)}" data-session-label="${esc(s.label)}">Delete</button></div></details>`;
-  const sessions = list => list.map(s => `<div class="project-session"><a href="#job=${esc(s.id)}" title="${esc(s.label)}">${esc(s.label.replace(/^OCR · /, ''))}</a>${sessionMenu(s)}</div>`).join('');
+  const sessions = list => list.map(s => `<div class="project-session"><a href="#job=${esc(s.id)}" title="${esc(s.label)}">${esc(s.label.replace(/^OCR · /, ''))}</a>${s.driveFileId ? '<span class="drive-state" title="PDF linked in Google Drive">✓ Drive</span>' : ''}${sessionMenu(s)}</div>`).join('');
   const projectMenu = p => `<details class="more-menu"><summary title="Project options">•••</summary><div class="menu-pop"><button data-rename-project="${esc(p.id)}" data-project-label="${esc(p.label)}">Rename</button><button class="danger" data-delete-project="${esc(p.id)}" data-project-label="${esc(p.label)}">Delete</button></div></details>`;
   const folders = data.projects.map(p => `<div class="project"><div class="project-row"><div class="project-name">📁 ${esc(p.label)}</div>${projectMenu(p)}</div><div class="project-sessions">${sessions(byProject.get(p.id)) || '<span class="hint">Empty</span>'}</div></div>`).join('');
   const localJobs = data.localJobs || [];
@@ -901,7 +904,10 @@ async function drawJobList() {
         : workflow.stage === 'pushed' ? '<br><small>✓ Pushed to database</small>'
         : workflow.previouslyFinalized ? '<br><small>Changed — finalize again</small>' : '';
       const session = j.sessionId ? `<br><small>Session: ${esc(j.sessionId)}${j.projectId ? ` · Project: ${esc(j.projectId)}` : ''}</small>` : '';
-      return `<tr><td class="name">${esc(j.filename)}${session}${detail}</td><td class="state">${state}</td>
+      const drive = j.driveFileId
+        ? '<small class="drive-state linked" title="This job has a Google Drive file ID">✓ Drive file linked</small>'
+        : '<small class="drive-state" title="This job has no saved Google Drive file ID; a PDF elsewhere in Drive is not automatically linked">Drive link missing</small>';
+      return `<tr><td class="name">${esc(j.filename)}${session}${drive}${detail}</td><td class="state">${state}</td>
         <td class="links">${workflow.stage === 'ready' && mongo.available ? `<button class="ghost" data-push="${j.id}">⬆ Push to database</button> ` : ''}${j.hasResult ? `<a href="#job=${j.id}">Results</a> · <a href="/review#job=${j.id}">Review</a> · ` : ""}${
           canDelete ? `<a class="del" data-del="${j.id}" data-name="${esc(j.filename)}" data-q="${j.questions ?? ""}" title="Delete this PDF and everything extracted from it">Delete</a>` : ""}</td></tr>`;
     }).join("")}</tbody></table>`;
