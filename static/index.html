@@ -421,7 +421,7 @@ async function loadProjects() {
   const localJobs = data.localJobs || [];
   const canUpload = Boolean(data.driveConfigured);
   const legacyFolder = localJobs.length ? `<div class="project"><div class="project-row"><div class="project-name">Local PDF jobs (${localJobs.length})</div><button class="ghost" id="importAllSessions" type="button" style="margin-left:auto;padding:3px 7px;font-size:11px" ${canUpload ? '' : 'disabled title="Configure Google Drive and restart the server"'}>Upload all</button></div>${canUpload ? '' : '<div class="hint">Configure Google Drive to upload these PDFs as sessions.</div>'}<div class="project-sessions">${localJobs.map(j => `<div class="project-session"><a href="#job=${esc(j.id)}" title="${esc(j.label)}">${esc(j.label)}</a> <a href="/review#job=${esc(j.id)}" title="Review ${esc(j.label)}">Review</a><details class="more-menu"><summary title="Local job options">•••</summary><div class="menu-pop"><button data-import-session="${esc(j.id)}" data-job-label="${esc(j.label)}" ${canUpload ? '' : 'disabled title="Configure Google Drive and restart the server"'}>Upload to sessions</button></div></details></div>`).join('')}</div></div>` : '';
-  $("projectTree").innerHTML = folders + (unfiled.length ? `<div class="project"><div class="project-row"><div class="project-name">Unfiled sessions</div></div><div class="project-sessions">${sessions(unfiled)}</div></div>` : '') + legacyFolder || '<span class="hint">Create a project to organize sessions.</span>';
+  $("projectTree").innerHTML = folders + (unfiled.length ? `<div class="project"><div class="project-row"><div class="project-name">Unfiled OCR sessions</div></div><div class="project-sessions">${sessions(unfiled)}</div></div>` : '') + legacyFolder || '<span class="hint">Create a project to organize sessions.</span>';
   $("projectTree").querySelectorAll("[data-move-session]").forEach(select => select.onchange = async () => {
     const r = await fetch(`/api/sessions/${encodeURIComponent(select.dataset.moveSession)}/project`, {
       method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({projectId: select.value || null})
@@ -903,7 +903,7 @@ async function drawJobList() {
       const detail = workflow.stage === 'ready' ? '<br><small>✓ Final reviewed & bundled</small>'
         : workflow.stage === 'pushed' ? '<br><small>✓ Pushed to database</small>'
         : workflow.previouslyFinalized ? '<br><small>Changed — finalize again</small>' : '';
-      const session = j.sessionId ? `<br><small>Session: ${esc(j.sessionId)}${j.projectId ? ` · Project: ${esc(j.projectId)}` : ''}</small>` : '';
+      const session = j.sessionId ? `<br><small title="This OCR review session is separate from the ingest app's session ID">OCR session: ${esc(j.sessionId)}${j.projectId ? ` · Project: ${esc(j.projectId)}` : ''}</small>` : '';
       const drive = j.driveFileId
         ? '<small class="drive-state linked" title="This job has a Google Drive file ID">✓ Drive file linked</small>'
         : '<small class="drive-state" title="This job has no saved Google Drive file ID; a PDF elsewhere in Drive is not automatically linked">Drive link missing</small>';
@@ -913,7 +913,7 @@ async function drawJobList() {
     }).join("")}</tbody></table>`;
   $("jobList").innerHTML = `<div class="job-tabs" role="tablist" aria-label="Session workflow">
       <button id="job-tab-ready" role="tab" data-job-tab="ready" aria-controls="job-panel-ready">Final reviewed & bundled (${ready.length})</button>
-      <button id="job-tab-pending" role="tab" data-job-tab="pending" aria-controls="job-panel-pending">Sessions · Review pending (${pending.length})</button>
+      <button id="job-tab-pending" role="tab" data-job-tab="pending" aria-controls="job-panel-pending">OCR jobs · Review pending (${pending.length})</button>
       ${pushed.length ? `<button id="job-tab-pushed" role="tab" data-job-tab="pushed" aria-controls="job-panel-pushed">Pushed to database (${pushed.length})</button>` : ''}
     </div>
     <section class="job-panel" id="job-panel-ready" role="tabpanel" aria-labelledby="job-tab-ready">
