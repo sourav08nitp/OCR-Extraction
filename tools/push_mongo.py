@@ -193,9 +193,36 @@ def put_images_supabase(record, images_dir, write):
 
 
 DOCUMENTS = "ingest_documents"
+SESSIONS = "ingest_sessions"
 
 
-def push_document(records, database, *, file_name, session_id=None, write=False, now=None):
+def ensure_session(database, session_id=None, *, context=None, write=False, now=None):
+    """Resolve an existing ingest session or create one durable OCR session."""
+    from bson import ObjectId
+
+    if session_id:
+        return session_id if isinstance(session_id, ObjectId) else ObjectId(str(session_id))
+    now = now or datetime.now(timezone.utc)
+    context = context or {}
+    created_id = ObjectId()
+    if write:
+        database[SESSIONS].insert_one({
+            "_id": created_id,
+            "label": context.get("label") or f"OCR session · {now.isoformat()}",
+            "exam": normalize_exam(context.get("exam")),
+            "subject": context.get("subject") or None,
+            "module": context.get("module") or None,
+            # OCR owns this optional assignment until the ingest app gains a Project model.
+            "projectId": context.get("projectId") or None,
+            "autoRun": False,
+            "deletedAt": None,
+            "createdAt": now,
+            "updatedAt": now,
+        })
+    return created_id
+
+
+def push_document(records, database, *, file_name, session_id=None, drive_file_id=None, write=False, now=None):
     """Upsert the ingest_documents row the questions hang off.
 
     The app finds questions through session -> ingest_documents.sessionId -> question.documentId, so
@@ -214,10 +241,8 @@ def push_document(records, database, *, file_name, session_id=None, write=False,
     kinds = [r.get("questionType") for r in records if r.get("questionType")]
     fields = {
         "fileName": file_name,
-        # The PDF never went to Drive - it was extracted here. This cannot be "" for every chapter:
-        # driveFileId carries a UNIQUE index, so a second one would be rejected as a duplicate key.
-        # A per-document value keeps it unique and is obviously not a Drive id.
-        "driveFileId": f"local:{doc_id}",
+        # The ingest document list and source-PDF viewer both use this real Google Drive id.
+        "driveFileId": drive_file_id or f"local:{doc_id}",
         "uploadGroupId": "",          # what Prisma's @default("") would have written
         "deletedAt": None,
         "kind": "question",          # the PDF holds the questions; their answers are in the same file
@@ -249,7 +274,7 @@ def push_document(records, database, *, file_name, session_id=None, write=False,
         database[DOCUMENTS].update_one({"_id": doc_id},
                                        {"$set": fields, "$setOnInsert": {"createdAt": now}}, upsert=True)
     return {"documentId": str(doc_id), "sessionId": str(fields.get("sessionId") or ""),
-            "fileName": file_name, "questionCount": len(records)}
+            "driveFileId": fields["driveFileId"], "fileName": file_name, "questionCount": len(records)}
 
 
 def connect(uri=None, db=None):
@@ -275,7 +300,8 @@ def image_mode(choice="auto"):
 
 def push_records(records, images_dir=None, *, database=None, collection=None, write=False,
                  images="auto", image_url=None, string_ids=False, chapter=None,
-                 file_name=None, session_id=None):
+                 file_name=None, session_id=None, drive_file_id=None, session_context=None,
+                 create_session=True):
     """Push one chapter. Shared by the command line and the web app so both behave identically.
     Returns counts; with write=False nothing is sent and nothing is uploaded."""
     from pymongo import UpdateOne
@@ -313,8 +339,12 @@ def push_records(records, images_dir=None, *, database=None, collection=None, wr
         res = coll.bulk_write([UpdateOne({"_id": d["_id"]}, {"$set": d}, upsert=True) for d in docs],
                               ordered=False)
         new, updated = res.upserted_count, res.modified_count
+    resolved_session_id = session_id or os.environ.get("MONGODB_SESSION_ID")
+    if docs and write and (resolved_session_id or create_session):
+        resolved_session_id = ensure_session(database, resolved_session_id,
+                                             context=session_context, write=True)
     doc_row = push_document(docs, database, file_name=file_name or chapter,
-                            session_id=session_id or os.environ.get("MONGODB_SESSION_ID"),
+                            session_id=resolved_session_id, drive_file_id=drive_file_id,
                             write=write)
     return {"questions": len(docs), "new": new, "updated": updated, "imagesStored": stored,
             "imagesReused": reused, "missing": sorted(set(missing)), "wrote": bool(write),

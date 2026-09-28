@@ -1,0 +1,19 @@
+# Web application and PDF extraction.
+Flask>=3.0,<4
+pdfplumber>=0.11,<1
+pypdfium2>=5.9,<6
+Pillow>=12.2,<13
+numpy>=1.26,<3
+scipy>=1.11,<2
+rapidocr_onnxruntime>=1.2.3,<2
+requests>=2.31,<3
+openai>=1.0,<4
+
+# Local LaTeX OCR. The app still works without these when "Convert formula images" is off.
+torch>=2.0,<3
+pix2tex[gui]>=0.1.2
+
+# Database, image storage, and Google Drive source-PDF filing.
+pymongo>=4.6,<5
+google-api-python-client>=2.0,<3
+google-auth>=2.0,<3

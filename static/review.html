@@ -276,6 +276,8 @@ async function save() {
     const result = await r.json();
     data.workflow = result.workflow;
     if (result.documentId) data.document.documentId = result.documentId;
+    if (result.sessionId) data.document.sessionId = result.sessionId;
+    if (result.driveFileId) data.document.driveFileId = result.driveFileId;
     drawWorkflow();
     $("saveState").textContent = "Saved";
     return true;
@@ -549,7 +551,7 @@ async function setUpMongo() {
   btn.hidden = !cfg.available;          // no MONGODB_URI on the server: no button at all
   if (!cfg.available) return;
   const where = cfg.images === "supabase" ? `Supabase bucket "${cfg.bucket}"` : "GridFS";
-  btn.title = `Bundle this chapter and send it to ${cfg.db}.${cfg.collection}, images to ${where}`;
+  btn.title = `File the source PDF in Google Drive, then send this chapter to ${cfg.db}.${cfg.collection}; images to ${where}`;
   btn.onclick = async () => {
     stashTextEdit(); clearTimeout(saveTimer);
     if (!await save()) return;
@@ -604,6 +606,9 @@ function draw() {
 }
 
 const DOC_FORM = [
+  ["Session", [
+    ["projectId", "Project ID", "text", "Optional — assign this session to a project whenever you are ready."],
+  ]],
   ["Where these questions belong", [
     ["module", "Module", "documentChoice", null],
     ["chapter", "Chapter", "documentChoice", null],
