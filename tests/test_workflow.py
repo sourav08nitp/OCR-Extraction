@@ -322,8 +322,10 @@ class WorkflowTests(unittest.TestCase):
         self.finalize()
         backend = Mock()
         backend.connect.return_value = (Mock(), Mock())
-        cfg = {'available': True, 'db': 'test', 'collection': 'questions'}
-        with patch.dict('sys.modules', {'push_mongo': backend}), patch.object(app, '_mongo_settings', return_value=cfg):
+        cfg = {'available': True, 'db': 'test', 'collection': 'questions', 'driveConfigured': True}
+        with patch.dict('sys.modules', {'push_mongo': backend}), \
+                patch.object(app, '_mongo_settings', return_value=cfg), \
+                patch('drive_store.upload_pdf', return_value='drive-file-id'):
             for write, missing, expected in ((False, [], 'ready'), (True, ['missing.png'], 'ready'), (True, [], 'pushed')):
                 backend.push_records.return_value = {'wrote': write, 'missing': missing, 'questions': 1}
                 r = self.client.post('/api/jobs/abc123/push', json={'write': write})

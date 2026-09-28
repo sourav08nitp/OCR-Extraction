@@ -26,7 +26,7 @@ MANUAL_FIELDS = ["topic", "level", "questionType", "sectionName", "isPyq", "pyqE
 # edited text refers to images as ![](img:NAME); they become real URLs on screen and in the export
 IMG_REF = re.compile(r"!\[\]\(img:([^)\s]+)\)")
 # document-level settings shown on the Document tab
-DOC_FIELDS = ["documentId", "module", "chapter", "subject", "exam", "section", "sectionName", "questionType", "level",
+DOC_FIELDS = ["documentId", "sessionId", "driveFileId", "projectId", "module", "chapter", "subject", "exam", "section", "sectionName", "questionType", "level",
               "topic", "isPyq", "pyqExam", "pyqYear", "paper", "answerFrom", "imageBaseUrl",
               "syllabusChapter", "topics"]
 TOPICS_FILE = Path(__file__).resolve().parent / "topics.json"

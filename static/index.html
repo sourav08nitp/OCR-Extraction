@@ -29,7 +29,29 @@
   header p { margin: 0; color: var(--muted); font: 14px system-ui, sans-serif; }
   .ui { font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
 
-  #upload { max-width: 640px; margin: 48px auto; padding: 0 16px; }
+  .session-home { display: grid; grid-template-columns: 240px minmax(0, 640px); gap: 32px; max-width: 960px; margin: 40px auto; padding: 0 16px; }
+  #projects { font: 14px system-ui, sans-serif; border-right: 1px solid var(--line); padding-right: 14px; }
+  #projects h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin: 0 0 10px; }
+  .project-head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .project-head button { padding: 4px 9px; }
+  .project { margin: 8px 0; }
+  .project-row { display:flex; align-items:center; gap:4px; min-height:26px; border-radius:6px; padding:2px 4px; }
+  .project-row:hover, .project-session:hover { background:var(--accent-soft); }
+  .project-name { font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .project-sessions { margin: 4px 0 0 8px; padding-left: 8px; border-left: 1px solid var(--line); }
+  .project-session { display:flex; align-items:center; gap:4px; color:var(--muted); font-size:12px; padding:3px 4px; border-radius:6px; }
+  .project-session a { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; text-decoration:none; color:var(--accent); }
+  .more-menu { position:relative; margin-left:auto; opacity:0; }
+  .project-row:hover .more-menu, .project-session:hover .more-menu, .more-menu[open] { opacity:1; }
+  .more-menu summary { list-style:none; cursor:pointer; width:24px; height:24px; display:grid; place-items:center; border-radius:5px; color:var(--muted); font-weight:900; letter-spacing:1px; }
+  .more-menu summary::-webkit-details-marker { display:none; }
+  .more-menu summary:hover { background:var(--line); color:var(--ink); }
+  .menu-pop { position:absolute; z-index:5; right:0; top:27px; min-width:150px; padding:6px; border:1px solid var(--line); border-radius:8px; background:var(--panel); box-shadow:0 10px 25px rgba(0,0,0,.18); }
+  .menu-pop button, .menu-pop select { display:block; width:100%; margin:2px 0; font:12px system-ui,sans-serif; text-align:left; }
+  .menu-pop button { padding:6px 8px; background:transparent; color:var(--ink); border:0; border-radius:5px; }
+  .menu-pop button:hover { background:var(--accent-soft); }
+  .menu-pop button.danger { color:var(--err); }
+  #upload { min-width: 0; }
   .drop { border: 2px dashed var(--line); border-radius: 14px; background: var(--panel);
           padding: 44px 24px; text-align: center; cursor: pointer; transition: .15s; }
   .drop.over, .drop:hover { border-color: var(--accent); background: var(--accent-soft); }
@@ -111,6 +133,8 @@
   .small { font-size: 11px; margin-top: 4px; }
   #panelBody .more { margin-top: 12px; }
   @media (max-width: 760px) {
+    .session-home { grid-template-columns: minmax(0, 1fr); margin: 24px auto; }
+    #projects { border-right: 0; border-bottom: 1px solid var(--line); padding: 0 0 14px; }
     .prow { grid-template-columns: minmax(0, 1fr); gap: 6px; }
     .parrow { display: none; }
     dialog#panel { width: calc(100vw - 16px); height: calc(100vh - 16px); }
@@ -173,6 +197,11 @@
   <p class="ui">Solution PDF &rarr; questions, solutions and LaTeX. Runs entirely on this computer.</p>
 </header>
 
+<div class="session-home" id="sessionHome">
+<aside id="projects" class="ui">
+  <div class="project-head"><h2>Projects</h2><button class="ghost" id="newProject" type="button">+ New</button></div>
+  <div id="projectTree" class="hint">Loading projects…</div>
+</aside>
 <section id="upload" class="ui">
   <div class="drop" id="drop">
     <strong>Drop solution PDFs here</strong>
@@ -182,6 +211,7 @@
   <input type="file" id="file" accept="application/pdf,.pdf" hidden multiple>
   <div class="row">
     <div>
+      <label class="opt">Project <select id="projectId"><option value="">No project</option></select></label>
       <label class="opt"><input type="checkbox" id="latex" checked> Convert formula images to LaTeX</label>
       <label class="opt" id="aiOpt" hidden><input type="checkbox" id="ai" checked> Use AI (<span id="aiModel"></span>) for formulas the local model can't read</label>
     </div>
@@ -191,6 +221,7 @@
   <div class="error" id="uploadErr"></div>
   <div id="jobList"></div>
 </section>
+</div>
 
 <section id="progress" class="ui">
   <strong id="pTitle">Working&hellip;</strong>
@@ -248,6 +279,7 @@ function pick(files) {
 async function uploadOne(file) {
   const fd = new FormData();
   fd.append("pdf", file);
+  if ($("projectId").value) fd.append("projectId", $("projectId").value);
   fd.append("latex", $("latex").checked ? "1" : "0");
   fd.append("ai", aiConfig.ai_available && $("ai").checked ? "1" : "0");
   const r = await fetch("/api/upload", { method: "POST", body: fd });
@@ -282,7 +314,7 @@ $("go").onclick = async () => {
 
 // ---------- progress ----------
 function showProgress() {
-  $("upload").style.display = "none";
+  $("sessionHome").style.display = "none";
   $("result").style.display = "none";
   $("pErr").textContent = "";
   $("progress").style.display = "block";
@@ -350,6 +382,90 @@ async function loadResult(id) {
 
 const esc = s => s.replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const imgUrl = name => `/api/jobs/${jobId}/images/${encodeURIComponent(name)}`;
+
+async function loadProjects() {
+  let data;
+  try {
+    const r = await fetch("/api/ocr/projects");
+    data = await r.json();
+    if (!r.ok) throw new Error(data.error || r.statusText);
+  } catch (e) {
+    $("projectTree").textContent = "Could not load projects: " + e.message;
+    return;
+  }
+  const byProject = new Map(data.projects.map(p => [p.id, []]));
+  const unfiled = [];
+  for (const session of data.sessions) (byProject.get(session.projectId) || unfiled).push(session);
+  $("projectId").innerHTML = '<option value="">No project</option>' + data.projects
+    .map(p => `<option value="${esc(p.id)}">${esc(p.label)}</option>`).join('');
+  const moveMenu = s => `<select data-move-session="${esc(s.id)}" title="Move to project"><option value="">Unfiled</option>${data.projects.map(p => `<option value="${esc(p.id)}" ${s.projectId === p.id ? 'selected' : ''}>${esc(p.label)}</option>`).join('')}</select>`;
+  const sessionMenu = s => `<details class="more-menu"><summary title="Session options">•••</summary><div class="menu-pop">${moveMenu(s)}<button data-rename-session="${esc(s.id)}" data-session-label="${esc(s.label)}">Rename</button><button class="danger" data-delete-session="${esc(s.id)}" data-session-label="${esc(s.label)}">Delete</button></div></details>`;
+  const sessions = list => list.map(s => `<div class="project-session"><a href="#job=${esc(s.id)}" title="${esc(s.label)}">${esc(s.label.replace(/^OCR · /, ''))}</a>${sessionMenu(s)}</div>`).join('');
+  const projectMenu = p => `<details class="more-menu"><summary title="Project options">•••</summary><div class="menu-pop"><button data-rename-project="${esc(p.id)}" data-project-label="${esc(p.label)}">Rename</button><button class="danger" data-delete-project="${esc(p.id)}" data-project-label="${esc(p.label)}">Delete</button></div></details>`;
+  const folders = data.projects.map(p => `<div class="project"><div class="project-row"><div class="project-name">📁 ${esc(p.label)}</div>${projectMenu(p)}</div><div class="project-sessions">${sessions(byProject.get(p.id)) || '<span class="hint">Empty</span>'}</div></div>`).join('');
+  $("projectTree").innerHTML = folders + (unfiled.length ? `<div class="project"><div class="project-row"><div class="project-name">Unfiled sessions</div></div><div class="project-sessions">${sessions(unfiled)}</div></div>` : '') || '<span class="hint">Create a project to organize sessions.</span>';
+  $("projectTree").querySelectorAll("[data-move-session]").forEach(select => select.onchange = async () => {
+    const r = await fetch(`/api/sessions/${encodeURIComponent(select.dataset.moveSession)}/project`, {
+      method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({projectId: select.value || null})
+    });
+    const result = await r.json();
+    if (!r.ok) { alert(result.error || "Could not move session"); return; }
+    await loadProjects();
+  });
+  $("projectTree").querySelectorAll("[data-rename-session]").forEach(button => button.onclick = async () => {
+    const label = prompt("Session name", button.dataset.sessionLabel);
+    if (!label?.trim()) return;
+    const r = await fetch(`/api/sessions/${encodeURIComponent(button.dataset.renameSession)}`, {
+      method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({label})
+    });
+    const result = await r.json();
+    if (!r.ok) { alert(result.error || "Could not rename session"); return; }
+    await loadProjects();
+  });
+  $("projectTree").querySelectorAll("[data-delete-session]").forEach(button => button.onclick = async () => {
+    if (!confirm(`Delete OCR session "${button.dataset.sessionLabel}"? The PDF remains in Drive.`)) return;
+    const r = await fetch(`/api/sessions/${encodeURIComponent(button.dataset.deleteSession)}`, {method: "DELETE"});
+    const result = await r.json();
+    if (!r.ok) { alert(result.error || "Could not delete session"); return; }
+    if (location.hash === `#job=${button.dataset.deleteSession}`) location.hash = "";
+    await loadProjects();
+  });
+  $("projectTree").querySelectorAll("[data-rename-project]").forEach(button => button.onclick = async () => {
+    const label = prompt("Project name", button.dataset.projectLabel);
+    if (!label?.trim()) return;
+    const r = await fetch(`/api/ocr/projects/${encodeURIComponent(button.dataset.renameProject)}`, {
+      method: "PATCH", headers: {"Content-Type": "application/json"}, body: JSON.stringify({label})
+    });
+    const result = await r.json();
+    if (!r.ok) { alert(result.error || "Could not rename project"); return; }
+    await loadProjects();
+  });
+  $("projectTree").querySelectorAll("[data-delete-project]").forEach(button => button.onclick = async () => {
+    if (!confirm(`Delete project "${button.dataset.projectLabel}"? Its sessions will become unfiled.`)) return;
+    const r = await fetch(`/api/ocr/projects/${encodeURIComponent(button.dataset.deleteProject)}`, {method: "DELETE"});
+    const result = await r.json();
+    if (!r.ok) { alert(result.error || "Could not delete project"); return; }
+    await loadProjects();
+  });
+}
+
+$("newProject").onclick = async () => {
+  const label = prompt("Project name");
+  if (!label?.trim()) return;
+  const r = await fetch("/api/ocr/projects", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({label})});
+  const data = await r.json();
+  if (!r.ok) { alert(data.error || "Could not create project"); return; }
+  await loadProjects();
+  $("projectId").value = data.id;
+};
+
+// Native <details> menus do not close themselves on an outside click, so give the
+// compact project/session menus the same behaviour users expect from app menus.
+document.addEventListener("click", event => {
+  document.querySelectorAll(".more-menu[open]").forEach(menu => {
+    if (!menu.contains(event.target)) menu.removeAttribute("open");
+  });
+});
 
 function reviewedDocument(saved) {
   const exercises = [], byTitle = new Map();
@@ -740,13 +856,14 @@ async function drawJobList() {
       const detail = workflow.stage === 'ready' ? '<br><small>✓ Final reviewed & bundled</small>'
         : workflow.stage === 'pushed' ? '<br><small>✓ Pushed to database</small>'
         : workflow.previouslyFinalized ? '<br><small>Changed — finalize again</small>' : '';
-      return `<tr><td class="name">${esc(j.filename)}${detail}</td><td class="state">${state}</td>
+      const session = j.sessionId ? `<br><small>Session: ${esc(j.sessionId)}${j.projectId ? ` · Project: ${esc(j.projectId)}` : ''}</small>` : '';
+      return `<tr><td class="name">${esc(j.filename)}${session}${detail}</td><td class="state">${state}</td>
         <td class="links">${workflow.stage === 'ready' && mongo.available ? `<button class="ghost" data-push="${j.id}">⬆ Push to database</button> ` : ''}${j.hasResult ? `<a href="#job=${j.id}">Results</a> · <a href="/review#job=${j.id}">Review</a> · ` : ""}${
           canDelete ? `<a class="del" data-del="${j.id}" data-name="${esc(j.filename)}" data-q="${j.questions ?? ""}" title="Delete this PDF and everything extracted from it">Delete</a>` : ""}</td></tr>`;
     }).join("")}</tbody></table>`;
-  $("jobList").innerHTML = `<div class="job-tabs" role="tablist" aria-label="PDF workflow">
+  $("jobList").innerHTML = `<div class="job-tabs" role="tablist" aria-label="Session workflow">
       <button id="job-tab-ready" role="tab" data-job-tab="ready" aria-controls="job-panel-ready">Final reviewed & bundled (${ready.length})</button>
-      <button id="job-tab-pending" role="tab" data-job-tab="pending" aria-controls="job-panel-pending">Uploaded PDFs · Review pending (${pending.length})</button>
+      <button id="job-tab-pending" role="tab" data-job-tab="pending" aria-controls="job-panel-pending">Sessions · Review pending (${pending.length})</button>
       ${pushed.length ? `<button id="job-tab-pushed" role="tab" data-job-tab="pushed" aria-controls="job-panel-pushed">Pushed to database (${pushed.length})</button>` : ''}
     </div>
     <section class="job-panel" id="job-panel-ready" role="tabpanel" aria-labelledby="job-tab-ready">
@@ -857,12 +974,13 @@ function showLocation() {
     jobId = null;
     $("progress").style.display = "none";
     $("result").style.display = "none";
-    $("upload").style.display = "block";
+    $("sessionHome").style.display = "grid";
     drawJobList();
   }
 }
 window.addEventListener("hashchange", showLocation);
 showLocation();
+loadProjects();
 </script>
 </body>
 </html>

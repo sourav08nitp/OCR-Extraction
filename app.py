@@ -9,11 +9,13 @@ import os
 import queue
 import shutil
 import sys
+import tempfile
 import zipfile
 import threading
 import traceback
 import uuid
 import warnings
+from datetime import datetime, timezone
 from pathlib import Path
 
 from flask import Flask, abort, jsonify, request, send_file, send_from_directory
@@ -29,8 +31,12 @@ warnings.filterwarnings("ignore")
 _from_env_file = settings.load()   # .env in the project root; real environment variables win
 
 BASE = Path(__file__).parent
-JOBS_DIR = BASE / "jobs"
-JOBS_DIR.mkdir(exist_ok=True)
+JOBS_DIR = Path(tempfile.gettempdir()) / "ocr-extraction-sessions"
+JOBS_DIR.mkdir(parents=True, exist_ok=True)
+# PDFs are source material, not project data.  They live outside the checkout only
+# for as long as the local extractor/review viewer needs them.
+TEMP_INPUT_DIR = Path(tempfile.gettempdir()) / "ocr-extraction-inputs"
+TEMP_INPUT_DIR.mkdir(parents=True, exist_ok=True)
 
 app = Flask(__name__, static_folder="static", static_url_path="/static")
 app.config["MAX_CONTENT_LENGTH"] = 200 * 1024 * 1024
@@ -47,6 +53,78 @@ def _get_model(job):
         job.update(stage="loading LaTeX model", done=0, total=0)
         _model = pdf_to_structured.load_latex_model()
     return _model
+
+
+def _meta(job_id):
+    try:
+        return json.loads((JOBS_DIR / job_id / "meta.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+
+
+def _save_meta(job_id, meta):
+    (JOBS_DIR / job_id / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+
+
+def _source_path(job_id, job=None):
+    details = job or jobs.get(job_id, {})
+    raw = details.get("tempPdf") or _meta(job_id).get("tempPdf")
+    return Path(raw) if raw else TEMP_INPUT_DIR / f"{job_id}.pdf"
+
+
+def _link_source(job_id, source):
+    """Expose a temporary source to legacy review code without storing it in the repo."""
+    link = JOBS_DIR / job_id / "input.pdf"
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(source)
+
+
+def _ensure_source(job_id, job=None):
+    """Retrieve the Drive source into system temp only when the review UI needs it."""
+    source = _source_path(job_id, job)
+    if source.is_file():
+        _link_source(job_id, source)
+        return source
+    details = job or jobs.get(job_id, {})
+    meta = _meta(job_id)
+    drive_file_id = details.get("driveFileId") or meta.get("driveFileId")
+    if not drive_file_id:
+        raise RuntimeError("The temporary PDF is gone and no Google Drive file is linked to this job")
+    import drive_store
+    drive_store.download_pdf(drive_file_id, source)
+    _link_source(job_id, source)
+    meta["tempPdf"] = str(source)
+    _save_meta(job_id, meta)
+    if details is not None:
+        details["tempPdf"] = str(source)
+    return source
+
+
+def _discard_source(job_id, job=None):
+    """Remove only the system-temp copy and its repository symlink."""
+    source = _source_path(job_id, job)
+    link = JOBS_DIR / job_id / "input.pdf"
+    removed = False
+    try:
+        if source.is_relative_to(TEMP_INPUT_DIR) and source.exists():
+            source.unlink()
+            removed = True
+    except OSError:
+        pass
+    try:
+        if link.is_symlink():
+            link.unlink()
+    except OSError:
+        pass
+    return removed
+
+
+def _assign_session_project(session_id, project_id):
+    """Assign an OCR-only session to an OCR project folder."""
+    if session_id:
+        import ocr_store
+        ocr_store.update_session(session_id, projectId=project_id or None)
 
 
 def _worker():
@@ -69,7 +147,7 @@ def _worker():
                                                    fields=job.get("fields", ("topic", "level")))
             else:
                 model = _get_model(job) if job["latex"] else None
-                doc = pdf_to_structured.run(job_dir / "input.pdf", job_dir / "out", want_latex=job["latex"],
+                doc = pdf_to_structured.run(_ensure_source(job_id, job), job_dir / "out", want_latex=job["latex"],
                                             progress=progress, model=model, use_ai=False)
                 if job.get("ai"):
                     if review.has_scanned_pages(doc):
@@ -78,10 +156,21 @@ def _worker():
                     else:
                         _ai_fix_existing(job_dir / "out", progress)
             job.update(status="done", stage="done")
+            try:
+                import ocr_store
+                ocr_store.update_session(job_id, status="ready")
+            except Exception:
+                pass
             _note_counts(job_dir)
         except Exception as e:
             traceback.print_exc()
             job.update(status="error", error=f"{type(e).__name__}: {e}")
+            try:
+                import ocr_store
+                ocr_store.update_session(job_id, status="error")
+            except Exception:
+                pass
+            _discard_source(job_id, job)
 
 
 def _note_counts(job_dir):
@@ -140,21 +229,46 @@ def upload():
     if head != b"%PDF-":
         return jsonify(error="That file is not a PDF"), 400
 
+    import drive_store
+    if not drive_store.configured():
+        return jsonify(error="Google Drive is not configured; the PDF is not kept locally"), 400
+
     job_id = uuid.uuid4().hex[:12]
+    source = TEMP_INPUT_DIR / f"{job_id}.pdf"
+    try:
+        # The browser posts to this local server, which immediately files the PDF
+        # in Drive. The only local copy is this system-temporary processing file.
+        f.save(source)
+        import ocr_store
+        session_id = job_id
+        ocr_store.create_session(session_id, f"OCR · {Path(f.filename).name}",
+                                 project_id=request.form.get("projectId") or None)
+        drive_file_id = drive_store.upload_pdf(source, Path(f.filename).name)
+        ocr_store.update_session(session_id, driveFileId=drive_file_id, status="extracting")
+    except Exception as e:
+        try:
+            source.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return jsonify(error=f"Could not upload the PDF to Google Drive: {e}"), 502
+
     job_dir = JOBS_DIR / job_id
     job_dir.mkdir()
-    f.save(job_dir / "input.pdf")
+    _link_source(job_id, source)
     want_ai = request.form.get("ai") == "1" and ai_fallback.available()
-    (job_dir / "meta.json").write_text(json.dumps(  # so the name survives a server restart
-        {"filename": Path(f.filename).name, "latex": request.form.get("latex") == "1" or want_ai, "ai": want_ai}),
-        encoding="utf-8")
+    _save_meta(job_id, {  # source data stays in Drive; only its id/path are recorded locally
+        "filename": Path(f.filename).name, "latex": request.form.get("latex") == "1" or want_ai,
+        "ai": want_ai, "sessionId": session_id, "projectId": request.form.get("projectId") or None,
+        "driveFileId": drive_file_id, "tempPdf": str(source)})
     jobs[job_id] = {
         "id": job_id, "filename": Path(f.filename).name,
         "latex": request.form.get("latex") == "1" or want_ai, "ai": want_ai,
+        "sessionId": session_id, "projectId": request.form.get("projectId") or None,
+        "driveFileId": drive_file_id, "tempPdf": str(source),
         "status": "queued", "stage": "waiting in queue", "done": 0, "total": 0, "error": None,
     }
     work.put(job_id)
-    return jsonify(job_id=job_id)
+    return jsonify(job_id=job_id, sessionId=session_id, driveFileId=drive_file_id)
 
 
 @app.get("/api/jobs")
@@ -162,7 +276,9 @@ def list_jobs():
     """Everything uploaded so far, newest first, for the list on the home page."""
     out = []
     for d in JOBS_DIR.iterdir():
-        if not d.is_dir() or not (d / "input.pdf").exists():
+        meta_path = d / "meta.json"
+        source_link = d / "input.pdf"
+        if not d.is_dir() or (not meta_path.is_file() and not source_link.exists()):
             continue
         meta = {}
         try:
@@ -173,6 +289,9 @@ def list_jobs():
         has_result = (d / "out" / "structured.json").is_file()
         out.append({
             "id": d.name,
+            "sessionId": live.get("sessionId") or meta.get("sessionId"),
+            "projectId": live.get("projectId") or meta.get("projectId"),
+            "driveFileId": live.get("driveFileId") or meta.get("driveFileId"),
             "filename": live.get("filename") or meta.get("filename") or "input.pdf",
             "status": live.get("status") or ("done" if has_result else "unknown"),
             "stage": live.get("stage"), "done": live.get("done", 0), "total": live.get("total", 0),
@@ -180,7 +299,7 @@ def list_jobs():
             "questions": meta.get("questions"),
             "hasResult": has_result,
             "workflow": review.workflow_status(d) if has_result else {"stage": "review"},
-            "uploadedAt": (d / "input.pdf").stat().st_mtime,
+            "uploadedAt": (meta_path if meta_path.is_file() else source_link).stat().st_mtime,
         })
     out.sort(key=lambda j: j["uploadedAt"], reverse=True)
     return jsonify(jobs=out)
@@ -200,6 +319,7 @@ def job_delete(job_id):
         return jsonify(error=f"this one is {status} - wait for it to finish, then delete it"), 409
     name = jobs.get(job_id, {}).get("filename") or job_id
     try:
+        _discard_source(job_id, jobs.get(job_id))
         shutil.rmtree(d)
     except OSError as e:
         return jsonify(error=f"could not delete it: {e}"), 500
@@ -230,7 +350,6 @@ def job_status(job_id):
     job["queue_position"] = work.qsize() if job["status"] == "queued" else 0
     return jsonify(job)
 
-
 @app.get("/api/jobs/<job_id>/result")
 def job_result(job_id):
     job = _job_or_404(job_id)
@@ -256,14 +375,23 @@ def review_page():
 
 @app.get("/api/jobs/<job_id>/pdf")
 def job_pdf(job_id):
-    _job_or_404(job_id)
-    return send_from_directory(JOBS_DIR / job_id, "input.pdf", mimetype="application/pdf")
+    job = _job_or_404(job_id)
+    try:
+        return send_file(_ensure_source(job_id, job), mimetype="application/pdf", download_name=job.get("filename"))
+    except RuntimeError as e:
+        return jsonify(error=str(e)), 404
 
 
 def _review_payload(job_id):
+    _ensure_source(job_id, _job_or_404(job_id))
     job_dir = JOBS_DIR / job_id
     doc = review.ensure_current(job_dir)
     saved = review.load_review(job_dir)
+    meta = _meta(job_id)
+    for field in ("sessionId", "projectId", "driveFileId"):
+        if meta.get(field) and not saved["document"].get(field):
+            saved["document"][field] = meta[field]
+    review.save_review(job_dir, saved)
     url = lambda n: f"img:{n}"  # same neutral form as edited text; the page turns it into a real URL
     qs = []
     for key, ex, q in review.questions(doc):
@@ -310,17 +438,78 @@ def job_review_save(job_id):
     saved = review.load_review(job_dir)
     doc_in = body.get("document") or {}
     document_id = saved["document"].get("documentId")
+    session_id = saved["document"].get("sessionId")
+    drive_file_id = saved["document"].get("driveFileId")
+    project_id = saved["document"].get("projectId")
     saved["document"] = {k: doc_in[k] for k in review.DOC_FIELDS if k in doc_in}
     if "exam" in saved["document"]:
         saved["document"]["exam"] = normalize_exam(saved["document"]["exam"])
     if document_id and not saved["document"].get("documentId"):
         saved["document"]["documentId"] = document_id
+    if session_id and not saved["document"].get("sessionId"):
+        saved["document"]["sessionId"] = session_id
+    if drive_file_id and not saved["document"].get("driveFileId"):
+        saved["document"]["driveFileId"] = drive_file_id
+    if project_id and not saved["document"].get("projectId"):
+        saved["document"]["projectId"] = project_id
+    if saved["document"].get("sessionId"):
+        try:
+            _assign_session_project(saved["document"]["sessionId"], saved["document"].get("projectId"))
+        except Exception as e:
+            return jsonify(error=f"Could not save the session project: {e}"), 502
     keys = {k for k, _, _ in review.questions(review.ensure_current(job_dir))}
     saved["questions"] = {k: {f: v for f, v in (m or {}).items() if f in review.MANUAL_FIELDS}
                           for k, m in (body.get("questions") or {}).items() if k in keys}
     review.save_review(job_dir, saved)
     return jsonify(ok=True, workflow=review.workflow_status(job_dir),
-                   documentId=saved["document"].get("documentId"))
+                   documentId=saved["document"].get("documentId"),
+                   sessionId=saved["document"].get("sessionId"),
+                   projectId=saved["document"].get("projectId"),
+                   driveFileId=saved["document"].get("driveFileId"))
+
+
+@app.patch("/api/sessions/<session_id>/project")
+def session_project(session_id):
+    body = request.get_json(silent=True) or {}
+    project_id = body.get("projectId")
+    if project_id is not None and (not isinstance(project_id, str) or len(project_id.strip()) > 200):
+        return jsonify(error="projectId must be a string up to 200 characters"), 400
+    try:
+        _assign_session_project(session_id, project_id.strip() if isinstance(project_id, str) else None)
+        return jsonify(sessionId=session_id, projectId=project_id.strip() if isinstance(project_id, str) else None)
+    except Exception as e:
+        return jsonify(error=f"Could not update the session project: {e}"), 502
+
+
+@app.patch("/api/sessions/<session_id>")
+def session_rename(session_id):
+    body = request.get_json(silent=True) or {}
+    label = str(body.get("label") or "").strip()
+    if not label or len(label) > 200:
+        return jsonify(error="Session name must be between 1 and 200 characters"), 400
+    try:
+        import ocr_store
+        ocr_store.update_session(session_id, label=label)
+        return jsonify(sessionId=session_id, label=label)
+    except Exception as e:
+        return jsonify(error=f"Could not rename the session: {e}"), 502
+
+
+@app.delete("/api/sessions/<session_id>")
+def session_delete(session_id):
+    try:
+        import ocr_store
+        removed = ocr_store.delete_session(session_id)
+        if not removed:
+            return jsonify(error="OCR session not found"), 404
+        # Session workspaces live only under the system temp directory.
+        if (JOBS_DIR / session_id).is_dir():
+            _discard_source(session_id, jobs.get(session_id))
+            shutil.rmtree(JOBS_DIR / session_id)
+        jobs.pop(session_id, None)
+        return jsonify(deleted=session_id)
+    except Exception as e:
+        return jsonify(error=f"Could not delete the OCR session: {e}"), 502
 
 
 @app.patch("/api/jobs/<job_id>/questions/<key>/text")
@@ -509,6 +698,7 @@ def job_question_ai(job_id, key):
 
 def _mongo_settings():
     """Where a push would go. The connection string stays in the environment, never in the project."""
+    import drive_store
     import supabase_store
     images = "supabase" if supabase_store.configured() else "gridfs"
     return {"available": bool(os.environ.get("MONGODB_URI")),
@@ -517,12 +707,60 @@ def _mongo_settings():
             "imageUrl": os.environ.get("MONGODB_IMAGE_URL") or "/files/",
             "sessionId": os.environ.get("MONGODB_SESSION_ID") or None,
             "images": images,
-            "bucket": supabase_store.settings()[2] if images == "supabase" else None}
+            "bucket": supabase_store.settings()[2] if images == "supabase" else None,
+            "driveConfigured": drive_store.configured()}
 
 
 @app.get("/api/mongo")
 def mongo_status():
     return jsonify(_mongo_settings())
+
+
+@app.get("/api/ocr/projects")
+def ocr_projects():
+    try:
+        import ocr_store
+        return jsonify(ocr_store.project_tree())
+    except Exception as e:
+        return jsonify(error=f"Could not load OCR projects: {e}"), 502
+
+
+@app.post("/api/ocr/projects")
+def ocr_project_create():
+    try:
+        import ocr_store
+        body = request.get_json(silent=True) or {}
+        project_id = ocr_store.create_project(body.get("label"))
+        return jsonify(id=project_id, label=str(body.get("label")).strip()), 201
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        return jsonify(error=f"Could not create OCR project: {e}"), 502
+
+
+@app.patch("/api/ocr/projects/<project_id>")
+def ocr_project_rename(project_id):
+    try:
+        import ocr_store
+        ocr_store.update_project(project_id, (request.get_json(silent=True) or {}).get("label"))
+        return jsonify(id=project_id)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except LookupError as e:
+        return jsonify(error=str(e)), 404
+    except Exception as e:
+        return jsonify(error=f"Could not rename OCR project: {e}"), 502
+
+
+@app.delete("/api/ocr/projects/<project_id>")
+def ocr_project_delete(project_id):
+    try:
+        import ocr_store
+        if not ocr_store.delete_project(project_id):
+            return jsonify(error="Project not found"), 404
+        return jsonify(deleted=project_id)
+    except Exception as e:
+        return jsonify(error=f"Could not delete OCR project: {e}"), 502
 
 
 @app.post("/api/jobs/<job_id>/bundle")
@@ -556,7 +794,7 @@ def job_finalize(job_id):
 
 @app.post("/api/jobs/<job_id>/push")
 def job_push(job_id):
-    """Bundle this chapter and push it to MongoDB. body: {write: bool, images: "gridfs"|"skip"}."""
+    """Bundle this chapter, file its source PDF in Drive, then push session-scoped records to MongoDB."""
     job = _job_or_404(job_id)
     if job["status"] != "done":
         abort(409)
@@ -564,6 +802,8 @@ def job_push(job_id):
     if not cfg["available"]:
         return jsonify(error="MONGODB_URI is not set - add it to the .env file in the project root, then restart app.py"), 400
     body = request.get_json(silent=True) or {}
+    if body.get("write") and not cfg["driveConfigured"]:
+        return jsonify(error="Google Drive is not configured - add the Drive OAuth values to .env, then restart app.py"), 400
     sys.path.insert(0, str(BASE / "tools"))
     try:
         import push_mongo
@@ -577,20 +817,45 @@ def job_push(job_id):
         client, database = push_mongo.connect(db=cfg["db"])
         try:
             records = json.loads((Path(bundle["folder"]) / "questions.json").read_text(encoding="utf-8"))
+            document = review.load_review(JOBS_DIR / job_id)["document"]
+            session_meta = _meta(job_id)
+            drive_file_id = document.get("driveFileId") or session_meta.get("driveFileId")
+            if body.get("write") and not drive_file_id:
+                import drive_store
+                drive_file_id = drive_store.upload_pdf(
+                    JOBS_DIR / job_id / "input.pdf", job.get("filename") or f"{name}.pdf",
+                    exam=document.get("exam"), subject=document.get("subject"),
+                    module=document.get("module"), chapter=document.get("chapter") or name,
+                )
             res = push_mongo.push_records(
                 records, Path(bundle["folder"]) / "images", database=database,
                 collection=cfg["collection"], write=bool(body.get("write")),
                 images=body.get("images", "auto"), chapter=name,
                 file_name=job.get("filename") or name,
-                session_id=body.get("sessionId") or os.environ.get("MONGODB_SESSION_ID"))
+                # OCR sessions are deliberately separate from ingest sessions.
+                session_id=None, create_session=False,
+                drive_file_id=drive_file_id,
+                session_context=None)
         finally:
             client.close()
+        source_deleted = False
+        if res.get("wrote") and res.get("document"):
+            saved = review.load_review(JOBS_DIR / job_id)
+            # Preserve the OCR session id; this push intentionally creates no ingest session.
+            saved["document"]["driveFileId"] = res["document"]["driveFileId"]
+            review.save_review(JOBS_DIR / job_id, saved)
+            try:
+                (JOBS_DIR / job_id / "input.pdf").unlink()
+                source_deleted = True
+            except OSError:
+                # The Drive file and MongoDB links are already durable; a local cleanup retry must not undo a push.
+                pass
         workflow = review.workflow_status(JOBS_DIR / job_id)
         if res.get("wrote") and not res.get("missing") and not bundle["missing"]:
             workflow = review.mark_pushed(JOBS_DIR / job_id, signature,
                                           {"db": cfg["db"], "collection": cfg["collection"]})
         return jsonify({**res, "bundle": bundle, "db": cfg["db"], "collection": cfg["collection"],
-                        "chapter": name, "workflow": workflow})
+                        "chapter": name, "workflow": workflow, "sourceDeleted": source_deleted})
     except RuntimeError as e:
         return jsonify(error=str(e)), 400
     except Exception as e:

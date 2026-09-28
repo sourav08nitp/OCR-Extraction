@@ -1,5 +1,8 @@
-"""Recognise single-symbol equation images (x, f, 3, *, ∴, ⇒ ...) by template matching
-against glyphs rendered from local Windows fonts. pix2tex is unreliable on these."""
+"""Recognise short equation images by template matching rendered local fonts.
+
+The project originally assumed Windows fonts.  Keep those as the first choice, but
+also support the macOS and Linux fonts used when the extractor runs elsewhere.
+"""
 
 import re
 from pathlib import Path
@@ -7,7 +10,13 @@ from pathlib import Path
 import numpy as np
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
-FONT_DIR = Path("C:/Windows/Fonts")
+FONT_DIRS = (
+    Path("C:/Windows/Fonts"),
+    Path("/System/Library/Fonts/Supplemental"),
+    Path("/Library/Fonts"),
+    Path("/usr/share/fonts/truetype/dejavu"),
+    Path("/usr/share/fonts/truetype/liberation2"),
+)
 SIZE = 32          # normalised glyph canvas (px)
 INK = 140          # grayscale below this counts as ink (drops light spell-check squiggles)
 ACCEPT = 0.7      # minimum match score; below this the caller should fall back to pix2tex
@@ -21,8 +30,17 @@ SYMBOLS = {
 }
 
 
-def _font(name, size=64):
-    return ImageFont.truetype(str(FONT_DIR / name), size)
+def _font(*names, size=64):
+    """Load the first available font from platform-specific alternatives."""
+    attempted = []
+    for name in names:
+        candidate = Path(name)
+        paths = (candidate,) if candidate.is_absolute() else tuple(folder / candidate for folder in FONT_DIRS)
+        for path in paths:
+            attempted.append(str(path))
+            if path.is_file():
+                return ImageFont.truetype(str(path), size)
+    raise OSError("No usable equation font found. Looked for: " + ", ".join(attempted))
 
 
 def ink_mask(im):
@@ -55,8 +73,10 @@ def _render(ch, font):
 
 def build_templates():
     specs = []
-    italic, upright, sym = _font("timesi.ttf"), _font("times.ttf"), _font("seguisym.ttf")
-    cambria = ImageFont.truetype(str(FONT_DIR / "cambria.ttc"), 64)
+    italic = _font("timesi.ttf", "Times New Roman Italic.ttf", "DejaVuSerif-Italic.ttf", "LiberationSerif-Italic.ttf")
+    upright = _font("times.ttf", "Times New Roman.ttf", "DejaVuSerif.ttf", "LiberationSerif-Regular.ttf")
+    sym = _font("seguisym.ttf", "Arial Unicode.ttf", "Arial Unicode MS.ttf", "DejaVuSans.ttf")
+    cambria = _font("cambria.ttc", "Cambria.ttc", "Arial Unicode.ttf", "DejaVuSans.ttf")
     for c in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ":
         specs.append((c, c, italic))
     # upright l/I/O/o dropped: they are indistinguishable from the digits 1 and 0
