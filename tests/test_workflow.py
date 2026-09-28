@@ -25,6 +25,7 @@ class WorkflowTests(unittest.TestCase):
         saved['document'] = {'module': 'Class 9', 'subject': 'Maths', 'topic': 'Arithmetic', 'level': 'easy'}
         review.save_review(self.job, saved)
         self.patches = [patch.object(app, 'JOBS_DIR', self.root),
+                        patch.object(app, 'LEGACY_JOBS_DIR', self.root / 'legacy'),
                         patch.object(review, 'BUNDLES', self.root / 'exports'),
                         patch.dict(app.jobs, {'abc123': {'status': 'done', 'filename': 'Test.pdf'}})]
         for p in self.patches:
@@ -40,6 +41,28 @@ class WorkflowTests(unittest.TestCase):
         response = self.client.post('/api/jobs/abc123/finalize')
         self.assertEqual(response.status_code, 200, response.json)
         self.assertEqual(response.json['workflow']['stage'], 'ready')
+
+    def test_existing_local_pdf_jobs_remain_visible_and_readable(self):
+        legacy = self.root / 'legacy' / 'old123'
+        (legacy / 'out').mkdir(parents=True)
+        (legacy / 'input.pdf').write_bytes(b'original local PDF')
+        (legacy / 'out' / 'structured.json').write_bytes((self.job / 'out' / 'structured.json').read_bytes())
+        (legacy / 'meta.json').write_text(json.dumps({'filename': 'Old chapter.pdf', 'questions': 1}), encoding='utf-8')
+        listed = self.client.get('/api/jobs')
+        old = next(j for j in listed.json['jobs'] if j['id'] == 'old123')
+        self.assertTrue(old['legacy'])
+        self.assertEqual(old['filename'], 'Old chapter.pdf')
+        result = self.client.get('/api/jobs/old123/result')
+        self.assertEqual(result.status_code, 200)
+        result.close()
+        self.assertEqual(self.client.get('/api/jobs/old123/review').status_code, 200)
+        pdf = self.client.get('/api/jobs/old123/pdf')
+        self.assertEqual(pdf.data, b'original local PDF')
+        pdf.close()
+        self.assertEqual((legacy / 'input.pdf').read_bytes(), b'original local PDF')
+        with patch('ocr_store.project_tree', return_value={'projects': [], 'sessions': []}):
+            tree = self.client.get('/api/ocr/projects').json
+        self.assertEqual(tree['localJobs'], [{'id': 'old123', 'label': 'Old chapter.pdf'}])
 
     def test_duplicate_image_cleanup_preserves_edits_and_source_files(self):
         path = self.job / 'out' / 'structured.json'

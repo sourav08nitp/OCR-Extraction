@@ -33,6 +33,29 @@ _from_env_file = settings.load()   # .env in the project root; real environment 
 BASE = Path(__file__).parent
 JOBS_DIR = Path(tempfile.gettempdir()) / "ocr-extraction-sessions"
 JOBS_DIR.mkdir(parents=True, exist_ok=True)
+LEGACY_JOBS_DIR = BASE / "jobs"  # pre-session PDFs and reviews remain in their original location
+
+
+def _job_dir(job_id):
+    """New sessions use temp storage; earlier jobs remain accessible in the checkout."""
+    if not isinstance(job_id, str) or not job_id.isalnum():
+        abort(404)
+    current = JOBS_DIR / job_id
+    legacy = LEGACY_JOBS_DIR / job_id
+    return current if current.exists() or not legacy.is_dir() else legacy
+
+
+def _iter_job_dirs():
+    seen = set()
+    for root in (JOBS_DIR, LEGACY_JOBS_DIR):
+        if not root.is_dir():
+            continue
+        for directory in root.iterdir():
+            if directory.is_dir() and directory.name not in seen:
+                seen.add(directory.name)
+                yield directory
+
+
 # PDFs are source material, not project data.  They live outside the checkout only
 # for as long as the local extractor/review viewer needs them.
 TEMP_INPUT_DIR = Path(tempfile.gettempdir()) / "ocr-extraction-inputs"
@@ -57,16 +80,19 @@ def _get_model(job):
 
 def _meta(job_id):
     try:
-        return json.loads((JOBS_DIR / job_id / "meta.json").read_text(encoding="utf-8"))
+        return json.loads((_job_dir(job_id) / "meta.json").read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
 
 
 def _save_meta(job_id, meta):
-    (JOBS_DIR / job_id / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
+    (_job_dir(job_id) / "meta.json").write_text(json.dumps(meta), encoding="utf-8")
 
 
 def _source_path(job_id, job=None):
+    legacy_source = LEGACY_JOBS_DIR / job_id / "input.pdf"
+    if _job_dir(job_id) == legacy_source.parent and legacy_source.is_file() and not legacy_source.is_symlink():
+        return legacy_source
     details = job or jobs.get(job_id, {})
     raw = details.get("tempPdf") or _meta(job_id).get("tempPdf")
     return Path(raw) if raw else TEMP_INPUT_DIR / f"{job_id}.pdf"
@@ -74,7 +100,7 @@ def _source_path(job_id, job=None):
 
 def _link_source(job_id, source):
     """Expose a temporary source to legacy review code without storing it in the repo."""
-    link = JOBS_DIR / job_id / "input.pdf"
+    link = _job_dir(job_id) / "input.pdf"
     if link.is_symlink() or link.exists():
         link.unlink()
     link.symlink_to(source)
@@ -84,7 +110,8 @@ def _ensure_source(job_id, job=None):
     """Retrieve the Drive source into system temp only when the review UI needs it."""
     source = _source_path(job_id, job)
     if source.is_file():
-        _link_source(job_id, source)
+        if source != _job_dir(job_id) / "input.pdf":
+            _link_source(job_id, source)
         return source
     details = job or jobs.get(job_id, {})
     meta = _meta(job_id)
@@ -104,7 +131,7 @@ def _ensure_source(job_id, job=None):
 def _discard_source(job_id, job=None):
     """Remove only the system-temp copy and its repository symlink."""
     source = _source_path(job_id, job)
-    link = JOBS_DIR / job_id / "input.pdf"
+    link = _job_dir(job_id) / "input.pdf"
     removed = False
     try:
         if source.is_relative_to(TEMP_INPUT_DIR) and source.exists():
@@ -132,7 +159,7 @@ def _worker():
         job_id = work.get()
         job = jobs[job_id]
         job["status"] = "running"
-        job_dir = JOBS_DIR / job_id
+        job_dir = _job_dir(job_id)
 
         def progress(stage, done, total):
             job.update(stage=stage, done=done, total=total)
@@ -202,11 +229,11 @@ threading.Thread(target=_worker, daemon=True).start()
 def _job_or_404(job_id):
     if job_id not in jobs:
         # finished jobs from an earlier server run are still on disk
-        if not job_id.isalnum() or not (JOBS_DIR / job_id / "out" / "structured.json").is_file():
+        if not job_id.isalnum() or not (_job_dir(job_id) / "out" / "structured.json").is_file():
             abort(404)
         meta = {}
         try:
-            meta = json.loads((JOBS_DIR / job_id / "meta.json").read_text(encoding="utf-8"))
+            meta = json.loads((_job_dir(job_id) / "meta.json").read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             pass
         jobs[job_id] = {"id": job_id, "filename": meta.get("filename", "input.pdf"), "latex": meta.get("latex"),
@@ -252,7 +279,7 @@ def upload():
             pass
         return jsonify(error=f"Could not upload the PDF to Google Drive: {e}"), 502
 
-    job_dir = JOBS_DIR / job_id
+    job_dir = _job_dir(job_id)
     job_dir.mkdir()
     _link_source(job_id, source)
     want_ai = request.form.get("ai") == "1" and ai_fallback.available()
@@ -275,7 +302,7 @@ def upload():
 def list_jobs():
     """Everything uploaded so far, newest first, for the list on the home page."""
     out = []
-    for d in JOBS_DIR.iterdir():
+    for d in _iter_job_dirs():
         meta_path = d / "meta.json"
         source_link = d / "input.pdf"
         if not d.is_dir() or (not meta_path.is_file() and not source_link.exists()):
@@ -289,6 +316,7 @@ def list_jobs():
         has_result = (d / "out" / "structured.json").is_file()
         out.append({
             "id": d.name,
+            "legacy": d.parent == LEGACY_JOBS_DIR,
             "sessionId": live.get("sessionId") or meta.get("sessionId"),
             "projectId": live.get("projectId") or meta.get("projectId"),
             "driveFileId": live.get("driveFileId") or meta.get("driveFileId"),
@@ -311,7 +339,7 @@ def job_delete(job_id):
 
     A job still in the queue or being worked on is refused: the worker holds the folder open, and
     half-deleting it underneath would leave a broken result behind."""
-    d = JOBS_DIR / job_id
+    d = _job_dir(job_id)
     if not d.is_dir():
         abort(404)
     status = jobs.get(job_id, {}).get("status")
@@ -355,9 +383,9 @@ def job_result(job_id):
     job = _job_or_404(job_id)
     if job["status"] != "done":
         abort(409)
-    out = JOBS_DIR / job_id / "out"
+    out = _job_dir(job_id) / "out"
     doc = json.loads((out / "structured.json").read_text(encoding="utf-8"))
-    review.deduplicate_saved_images(JOBS_DIR / job_id, doc)
+    review.deduplicate_saved_images(_job_dir(job_id), doc)
     if not doc.get("figures_checked"):
         # made before figure detection existed: diagrams/graphs may hold LaTeX or AI captions; restore them
         pdf_to_structured.classify_figures(doc, out / "images")
@@ -384,7 +412,7 @@ def job_pdf(job_id):
 
 def _review_payload(job_id):
     _ensure_source(job_id, _job_or_404(job_id))
-    job_dir = JOBS_DIR / job_id
+    job_dir = _job_dir(job_id)
     doc = review.ensure_current(job_dir)
     saved = review.load_review(job_dir)
     meta = _meta(job_id)
@@ -400,10 +428,14 @@ def _review_payload(job_id):
     name = jobs.get(job_id, {}).get("filename") or doc.get("chapter") or ""
     guessed = saved["document"].get("syllabusChapter") or review.guess_syllabus_key(
         name, saved["document"].get("subject"), review.detect_class(job_dir))
+    document_options = review.document_options(JOBS_DIR)
+    if LEGACY_JOBS_DIR.is_dir():
+        for field, values in review.document_options(LEGACY_JOBS_DIR).items():
+            document_options[field] = sorted(set(document_options[field]) | set(values), key=str.casefold)
     return {
         "document": saved["document"],
         "manualImages": saved["manualImages"],
-        "documentOptions": review.document_options(JOBS_DIR),
+        "documentOptions": document_options,
         "workflow": review.workflow_status(job_dir),
         "syllabus": {k: v["topics"] for k, v in syl.items()},
         "syllabusSources": {k: v.get("source") for k, v in syl.items()},
@@ -434,7 +466,7 @@ def job_review_save(job_id):
     if job["status"] != "done":
         abort(409)
     body = request.get_json(silent=True) or {}
-    job_dir = JOBS_DIR / job_id
+    job_dir = _job_dir(job_id)
     saved = review.load_review(job_dir)
     doc_in = body.get("document") or {}
     document_id = saved["document"].get("documentId")
@@ -503,9 +535,9 @@ def session_delete(session_id):
         if not removed:
             return jsonify(error="OCR session not found"), 404
         # Session workspaces live only under the system temp directory.
-        if (JOBS_DIR / session_id).is_dir():
+        if (_job_dir(session_id)).is_dir():
             _discard_source(session_id, jobs.get(session_id))
-            shutil.rmtree(JOBS_DIR / session_id)
+            shutil.rmtree(_job_dir(session_id))
         jobs.pop(session_id, None)
         return jsonify(deleted=session_id)
     except Exception as e:
@@ -522,7 +554,7 @@ def job_question_text(job_id, key):
     if not isinstance(body, dict) or not body or any(k not in fields or not isinstance(v, str)
                                                                   for k, v in body.items()):
         return jsonify(error="Provide question or solution text as strings"), 400
-    job_dir = JOBS_DIR / job_id
+    job_dir = _job_dir(job_id)
     doc = review.ensure_current(job_dir)
     try:
         ex, q = review.find_question(doc, key)
@@ -578,7 +610,7 @@ def job_question_add(job_id):
     if use_ai and not ai_fallback.available():
         return jsonify(error="OPENAI_API_KEY_2 is not set on the server"), 400
     try:
-        out = review.add_question(JOBS_DIR / job_id, int(body.get("page", 0)),
+        out = review.add_question(_job_dir(job_id), int(body.get("page", 0)),
                                   [float(v) for v in body.get("bbox", [])], use_ai)
         return jsonify(out)
     except (ValueError, TypeError, IndexError) as e:
@@ -593,7 +625,7 @@ def job_question_delete(job_id, key):
     """Remove a question added by hand. Questions found in the PDF are hidden with "skip" instead."""
     _job_or_404(job_id)
     try:
-        return jsonify(review.remove_added_question(JOBS_DIR / job_id, key))
+        return jsonify(review.remove_added_question(_job_dir(job_id), key))
     except KeyError:
         return jsonify(error="only questions you added by hand can be deleted"), 404
     except Exception as e:
@@ -608,7 +640,7 @@ def job_question_crop(job_id, key):
         abort(409)
     body = request.get_json(silent=True) or {}
     try:
-        out = review.crop_region(JOBS_DIR / job_id, key, body.get("part", "stem"),
+        out = review.crop_region(_job_dir(job_id), key, body.get("part", "stem"),
                                  int(body.get("page", 0)), [float(v) for v in body.get("bbox", [])])
         return jsonify(out)
     except KeyError:
@@ -629,7 +661,7 @@ def job_question_extract(job_id, key):
         return jsonify(error="OPENAI_API_KEY_2 is not set on the server"), 400
     body = request.get_json(silent=True) or {}
     try:
-        return jsonify(review.extract_region(JOBS_DIR / job_id, key, body.get("part"), int(body.get("page", 0)),
+        return jsonify(review.extract_region(_job_dir(job_id), key, body.get("part"), int(body.get("page", 0)),
                                              [float(v) for v in body.get("bbox", [])]))
     except KeyError:
         abort(404)
@@ -649,7 +681,7 @@ def job_question_image_text(job_id, key):
         return jsonify(error="OPENAI_API_KEY_2 is not set on the server"), 400
     body = request.get_json(silent=True) or {}
     try:
-        return jsonify(review.transcribe_question_image(JOBS_DIR / job_id, key, body.get("part"),
+        return jsonify(review.transcribe_question_image(_job_dir(job_id), key, body.get("part"),
                                                         body.get("name"), int(body.get("page", 0)),
                                                         body.get("bbox")))
     except KeyError:
@@ -671,7 +703,7 @@ def job_question_topic(job_id, key):
     body = request.get_json(silent=True) or {}
     fields = tuple(f for f in body.get("fields", ["topic", "level"]) if f in ("topic", "level")) or ("topic", "level")
     try:
-        out = review.fill_topics(JOBS_DIR / job_id, fields=fields, keys=[key], redo=True)
+        out = review.fill_topics(_job_dir(job_id), fields=fields, keys=[key], redo=True)
         return jsonify({**out, "value": out["values"].get(key, {})})
     except ValueError as e:
         return jsonify(error=str(e)), 400
@@ -688,7 +720,7 @@ def job_question_ai(job_id, key):
     if not ai_fallback.available():
         return jsonify(error="OPENAI_API_KEY_2 is not set on the server"), 400
     try:
-        return jsonify(review.ai_reread(JOBS_DIR / job_id, key))
+        return jsonify(review.ai_reread(_job_dir(job_id), key))
     except KeyError:
         abort(404)
     except Exception as e:
@@ -718,11 +750,20 @@ def mongo_status():
 
 @app.get("/api/ocr/projects")
 def ocr_projects():
+    local_jobs = []
+    if LEGACY_JOBS_DIR.is_dir():
+        for d in LEGACY_JOBS_DIR.iterdir():
+            if not d.is_dir() or not (d / "out" / "structured.json").is_file():
+                continue
+            meta = _meta(d.name)
+            local_jobs.append({"id": d.name, "label": meta.get("filename") or "input.pdf"})
+    local_jobs.sort(key=lambda j: j["label"].casefold())
     try:
         import ocr_store
-        return jsonify(ocr_store.project_tree())
+        return jsonify({**ocr_store.project_tree(), "localJobs": local_jobs})
     except Exception as e:
-        return jsonify(error=f"Could not load OCR projects: {e}"), 502
+        return jsonify(projects=[], sessions=[], localJobs=local_jobs,
+                       warning=f"Could not load OCR projects: {e}")
 
 
 @app.post("/api/ocr/projects")
@@ -771,7 +812,7 @@ def job_bundle(job_id):
         abort(409)
     name = review.bundle_name(job.get("filename"), job_id)
     try:
-        return jsonify(review.write_bundle(JOBS_DIR / job_id, name=name))
+        return jsonify(review.write_bundle(_job_dir(job_id), name=name))
     except Exception as e:
         traceback.print_exc()
         return jsonify(error=f"{type(e).__name__}: {e}"[:300]), 500
@@ -784,7 +825,7 @@ def job_finalize(job_id):
         abort(409)
     try:
         return jsonify(workflow=review.finalize_bundle(
-            JOBS_DIR / job_id, review.bundle_name(job.get("filename"), job_id)))
+            _job_dir(job_id), review.bundle_name(job.get("filename"), job_id)))
     except ValueError as e:
         return jsonify(error=str(e)), 400
     except Exception as e:
@@ -812,18 +853,18 @@ def job_push(job_id):
 
     name = review.bundle_name(job.get("filename"), job_id)
     try:
-        signature = review.review_signature(JOBS_DIR / job_id)
-        bundle = review.write_bundle(JOBS_DIR / job_id, name=name)
+        signature = review.review_signature(_job_dir(job_id))
+        bundle = review.write_bundle(_job_dir(job_id), name=name)
         client, database = push_mongo.connect(db=cfg["db"])
         try:
             records = json.loads((Path(bundle["folder"]) / "questions.json").read_text(encoding="utf-8"))
-            document = review.load_review(JOBS_DIR / job_id)["document"]
+            document = review.load_review(_job_dir(job_id))["document"]
             session_meta = _meta(job_id)
             drive_file_id = document.get("driveFileId") or session_meta.get("driveFileId")
             if body.get("write") and not drive_file_id:
                 import drive_store
                 drive_file_id = drive_store.upload_pdf(
-                    JOBS_DIR / job_id / "input.pdf", job.get("filename") or f"{name}.pdf",
+                    _job_dir(job_id) / "input.pdf", job.get("filename") or f"{name}.pdf",
                     exam=document.get("exam"), subject=document.get("subject"),
                     module=document.get("module"), chapter=document.get("chapter") or name,
                 )
@@ -840,19 +881,20 @@ def job_push(job_id):
             client.close()
         source_deleted = False
         if res.get("wrote") and res.get("document"):
-            saved = review.load_review(JOBS_DIR / job_id)
+            saved = review.load_review(_job_dir(job_id))
             # Preserve the OCR session id; this push intentionally creates no ingest session.
             saved["document"]["driveFileId"] = res["document"]["driveFileId"]
-            review.save_review(JOBS_DIR / job_id, saved)
-            try:
-                (JOBS_DIR / job_id / "input.pdf").unlink()
-                source_deleted = True
-            except OSError:
-                # The Drive file and MongoDB links are already durable; a local cleanup retry must not undo a push.
-                pass
-        workflow = review.workflow_status(JOBS_DIR / job_id)
+            review.save_review(_job_dir(job_id), saved)
+            if _job_dir(job_id) != LEGACY_JOBS_DIR / job_id:
+                try:
+                    (_job_dir(job_id) / "input.pdf").unlink()
+                    source_deleted = True
+                except OSError:
+                    # The Drive file and MongoDB links are already durable; a local cleanup retry must not undo a push.
+                    pass
+        workflow = review.workflow_status(_job_dir(job_id))
         if res.get("wrote") and not res.get("missing") and not bundle["missing"]:
-            workflow = review.mark_pushed(JOBS_DIR / job_id, signature,
+            workflow = review.mark_pushed(_job_dir(job_id), signature,
                                           {"db": cfg["db"], "collection": cfg["collection"]})
         return jsonify({**res, "bundle": bundle, "db": cfg["db"], "collection": cfg["collection"],
                         "chapter": name, "workflow": workflow, "sourceDeleted": source_deleted})
@@ -868,7 +910,7 @@ def job_export(job_id):
     job = _job_or_404(job_id)
     if job["status"] != "done":
         abort(409)
-    records = review.export(JOBS_DIR / job_id)
+    records = review.export(_job_dir(job_id))
     missing = sum(1 for r in records if review.missing_fields(r))
     body = json.dumps(records, indent=2, ensure_ascii=False)
     name = f"questions_{job_id}.json"
@@ -882,12 +924,12 @@ def job_images_zip(job_id):
     job = _job_or_404(job_id)
     if job["status"] != "done":
         abort(409)
-    records = review.export(JOBS_DIR / job_id)
+    records = review.export(_job_dir(job_id))
     files = sorted({Path(c["url"]).name for r in records for c in r["imageCrops"]})
     buf = io.BytesIO()
     with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as z:
         for f in files:
-            z.write(JOBS_DIR / job_id / "out" / "images" / f, f"images/{f}")
+            z.write(_job_dir(job_id) / "out" / "images" / f, f"images/{f}")
     buf.seek(0)
     return send_file(buf, mimetype="application/zip", as_attachment=True, download_name=f"images_{job_id}.zip")
 
@@ -906,7 +948,7 @@ def job_image_action(job_id, name):
     if action == "ai" and not ai_fallback.available():
         return jsonify(error="OPENAI_API_KEY_2 is not set on the server"), 400
 
-    job_dir = JOBS_DIR / job_id
+    job_dir = _job_dir(job_id)
     out = job_dir / "out"
     path = out / "structured.json"
     doc = json.loads(path.read_text(encoding="utf-8"))
@@ -969,7 +1011,7 @@ def job_image_action(job_id, name):
 @app.get("/api/jobs/<job_id>/images/<name>")
 def job_image(job_id, name):
     _job_or_404(job_id)
-    return send_from_directory(JOBS_DIR / job_id / "out" / "images", name, max_age=86400)
+    return send_from_directory(_job_dir(job_id) / "out" / "images", name, max_age=86400)
 
 
 if __name__ == "__main__":
