@@ -7,6 +7,7 @@ Needs OPENAI_API_KEY_2 in the environment. Model: OPENAI_LATEX_MODEL (default gp
 """
 
 import base64
+from collections import Counter
 import hashlib
 import io
 import json
@@ -216,6 +217,21 @@ PAGE_LINES_PROMPT = (
     "Keep Q./Question and Sol./Answer prefixes exactly so the question splitter can find boundaries. "
     'Return JSON only: {"lines":["first printed line","next printed line"]}.\n' + TRANSCRIPTION_RULES
 )
+
+LATEX_REPAIR_PROMPT = (
+    "Repair the maths, chemistry notation, and broken symbols in the CURRENT TEXT using the PDF image as ground truth. "
+    "The image may also contain the other half of the question: return ONLY the selected {part} text. "
+    "Preserve every prose sentence, answer choice, calculation step, label, and line break in the current text. "
+    "Replace non-printing control characters, replacement glyphs, and visible boxes with the symbols printed in the PDF. "
+    "For a reaction, retain reactants, products, coefficients, states, and text above/below the arrow. "
+    r"Put each mathematical or chemical expression inside \(...\), with KaTeX-compatible LaTeX "
+    r"(for example O_2 and \xrightarrow{{\text{{Heat}}}}). Do not use $ delimiters. "
+    "Keep each existing ![](img:...) reference exactly in its original position; do not invent or remove images. "
+    "Do not solve, summarize, or change the meaning. If the PDF does not clarify a symbol, retain its original image reference. "
+    'Return JSON only: {{"text":"the complete corrected selected part"}}.\nCURRENT TEXT:\n{current}'
+)
+
+BAD_TEXT_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f\ufffd]")
 # maths spans in what the model returns; $...$ is accepted too because the model occasionally falls back to it
 RE_MATH = re.compile(r"\\\((.+?)\\\)|\\\[(.+?)\\\]|\$([^$]+)\$", re.S)
 
@@ -265,15 +281,76 @@ def transcribe_region(png_bytes, n_figures=0, part=None):
 
     question, solution, raw = ask()
     errors = bad_math(question, solution)
-    if errors:  # one corrective retry, like the single-formula path
+    bad_symbols = bool(BAD_TEXT_CHARS.search(question + solution))
+    if errors or bad_symbols:  # one corrective retry, like the single-formula path
         messages += [{"role": "assistant", "content": raw},
-                     {"role": "user", "content": "These maths pieces do not render in KaTeX:\n" + "\n".join(errors[:15]) +
+                     {"role": "user", "content": "Correct the invalid maths and any non-printing control characters using the image. "
+                                                 "Keep all text and image markers.\n" + "\n".join(errors[:15]) +
                                                  "\nReply with the corrected JSON only."}]
         q2, s2, _ = ask()
         e2 = bad_math(q2, s2)
-        if len(e2) < len(errors):
+        if ((bad_symbols and not BAD_TEXT_CHARS.search(q2 + s2)) or
+                (not BAD_TEXT_CHARS.search(q2 + s2) and len(e2) < len(errors))):
             question, solution, errors = q2, s2, e2
+    if BAD_TEXT_CHARS.search(question + solution):
+        raise ValueError("AI returned unreadable control characters; no text was saved. Try Fix LaTeX on the selected part")
     return {"question": question, "solution": solution, "katexErrors": errors}
+
+
+def repair_text_latex(png_bytes, current_text, part):
+    """Repair one existing review field from its PDF source without touching the other field."""
+    if part not in ("question", "answer") or not current_text.strip():
+        raise ValueError("Choose a nonempty question or answer to repair")
+    images = re.findall(r"!\[\]\([^)]+\)", current_text)
+    def prose_words(value):
+        plain = RE_MATH.sub(" ", value)
+        plain = re.sub(r"!\[\]\([^)]+\)", " ", plain)
+        return Counter(re.findall(r"[a-z]{3,}", plain.lower()))
+
+    original_words = prose_words(current_text)
+    client = create_client(timeout=120)
+    messages = [{"role": "user", "content": [
+        {"type": "text", "text": LATEX_REPAIR_PROMPT.format(
+            part=part, current=json.dumps(current_text, ensure_ascii=True))},
+        _vision_image(png_bytes)]}]
+    last_error = None
+    for attempt in range(2):
+        response = client.chat.completions.create(
+            model=model_name(), messages=messages, max_completion_tokens=12000,
+            response_format={"type": "json_object"})
+        note_usage(response, "review LaTeX repair")
+        if response.choices[0].finish_reason == "length":
+            raise ValueError("AI response was cut off; the original text was kept")
+        raw = response.choices[0].message.content or ""
+        try:
+            corrected = json.loads(raw).get("text")
+        except json.JSONDecodeError:
+            corrected = None
+        if not isinstance(corrected, str) or not corrected.strip():
+            last_error = "AI did not return the corrected text"
+        elif BAD_TEXT_CHARS.search(corrected):
+            last_error = "AI still returned unreadable control characters"
+        elif re.findall(r"!\[\]\([^)]+\)", corrected) != images:
+            last_error = "AI changed an image reference"
+        elif (sum(original_words.values()) >= 10 and
+              sum((original_words & prose_words(corrected)).values()) < .8 * sum(original_words.values())):
+            last_error = "AI omitted too much of the original wording"
+        elif (corrected.count(r"\(") != corrected.count(r"\)") or
+              corrected.count(r"\[") != corrected.count(r"\]")):
+            last_error = "AI returned unmatched LaTeX delimiters"
+        elif re.search(r"(?<!\\)[_^]", re.sub(r"!\[\]\([^)]+\)|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]", " ", corrected)):
+            last_error = "AI left a subscript or superscript outside LaTeX"
+        else:
+            errors = [e for e in katex_errors(maths_spans(corrected)) if e]
+            if not errors:
+                return {"text": corrected.strip(), "katexErrors": []}
+            last_error = "KaTeX could not render: " + "; ".join(errors[:3])
+        if attempt == 0:
+            messages.extend([{"role": "assistant", "content": raw},
+                             {"role": "user", "content": last_error +
+                              ". Correct it from the PDF. Preserve the full text and all image references. "
+                              'Reply with JSON {"text":"..."} only.'}])
+    raise ValueError(last_error + "; the original text was kept")
 
 
 def transcribe_page_questions(png_bytes):

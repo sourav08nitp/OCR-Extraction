@@ -33,6 +33,22 @@ class AIKeyConfigurationTests(unittest.TestCase):
         self.assertIn('question field', content[0]['text'])
         self.assertEqual(content[1]['image_url']['detail'], 'original')
 
+    def test_crop_transcription_retries_control_character_before_saving(self):
+        client = Mock()
+        client.chat.completions.create.side_effect = [
+            SimpleNamespace(choices=[SimpleNamespace(finish_reason='stop', message=SimpleNamespace(
+                content=json.dumps({'question': '2Cu \x1f Heat', 'solution': ''})))], usage=None),
+            SimpleNamespace(choices=[SimpleNamespace(finish_reason='stop', message=SimpleNamespace(
+                content=json.dumps({'question': r'\(2\mathrm{Cu}\xrightarrow{\text{Heat}}2\mathrm{CuO}\)',
+                                    'solution': ''})))], usage=None),
+        ]
+        with patch.object(ai_fallback, 'create_client', return_value=client), \
+             patch.object(ai_fallback, 'katex_errors', return_value=[None]), \
+             patch.object(ai_fallback, 'note_usage'):
+            result = ai_fallback.transcribe_region(self._png(), part='stem')
+        self.assertNotIn('\x1f', result['question'])
+        self.assertEqual(client.chat.completions.create.call_count, 2)
+
     def test_truncated_page_audit_cannot_save_partial_questions(self):
         reply = SimpleNamespace(choices=[SimpleNamespace(finish_reason='length', message=SimpleNamespace(
             content=json.dumps({'questions': [{'number': 1}]})))], usage=None)
@@ -42,6 +58,37 @@ class AIKeyConfigurationTests(unittest.TestCase):
              patch.object(ai_fallback, 'note_usage'):
             with self.assertRaisesRegex(ValueError, 'cut off'):
                 ai_fallback.transcribe_page_questions(self._png())
+
+    def test_latex_repair_uses_source_image_and_rejects_broken_symbols(self):
+        before = 'Copper reacts: 2Cu + O_2 \x1f Heat \x1e 2CuO\n![](img:source.png)'
+        fixed = (r'Copper reacts: \(2\mathrm{Cu} + \mathrm{O}_2 '
+                 r'\xrightarrow{\text{Heat}} 2\mathrm{CuO}\)' + '\n![](img:source.png)')
+        bad = SimpleNamespace(choices=[SimpleNamespace(finish_reason='stop', message=SimpleNamespace(
+            content=json.dumps({'text': before})))], usage=None)
+        good = SimpleNamespace(choices=[SimpleNamespace(finish_reason='stop', message=SimpleNamespace(
+            content=json.dumps({'text': fixed})))], usage=None)
+        client = Mock()
+        client.chat.completions.create.side_effect = [bad, good]
+        with patch.object(ai_fallback, 'create_client', return_value=client), \
+             patch.object(ai_fallback, 'katex_errors', return_value=[None]), \
+             patch.object(ai_fallback, 'note_usage'), \
+             patch.object(ai_fallback, 'model_name', return_value='gpt-5.4-mini'):
+            result = ai_fallback.repair_text_latex(self._png(), before, 'answer')
+        self.assertEqual(result['text'], fixed)
+        content = client.chat.completions.create.call_args_list[0].kwargs['messages'][0]['content']
+        self.assertIn('selected answer text', content[0]['text'])
+        self.assertEqual(content[1]['image_url']['detail'], 'original')
+        self.assertEqual(client.chat.completions.create.call_count, 2)
+
+    def test_latex_repair_preserves_image_reference_or_leaves_original(self):
+        client = Mock()
+        client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(finish_reason='stop', message=SimpleNamespace(
+                content=json.dumps({'text': r'Changed formula \(x+1\)' })))], usage=None)
+        with patch.object(ai_fallback, 'create_client', return_value=client), \
+             patch.object(ai_fallback, 'note_usage'):
+            with self.assertRaisesRegex(ValueError, 'image reference'):
+                ai_fallback.repair_text_latex(self._png(), 'Original ![](img:source.png)', 'answer')
 
     def test_old_key_alone_does_not_enable_ai(self):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "old-test-key"}, clear=True):

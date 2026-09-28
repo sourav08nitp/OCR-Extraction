@@ -733,6 +733,25 @@ def job_question_ai(job_id, key):
         return jsonify(error=f"{type(e).__name__}: {e}"[:300]), 502
 
 
+@app.post("/api/jobs/<job_id>/questions/<key>/fix-latex")
+def job_question_fix_latex(job_id, key):
+    job = _job_or_404(job_id)
+    if job["status"] != "done":
+        abort(409)
+    if not ai_fallback.available():
+        return jsonify(error="OPENAI_API_KEY_2 is not set on the server"), 400
+    body = request.get_json(silent=True) or {}
+    try:
+        return jsonify(review.repair_question_latex(_job_dir(job_id), key, body.get("part")))
+    except KeyError:
+        abort(404)
+    except ValueError as e:
+        return jsonify(error=str(e)), 400
+    except Exception as e:
+        traceback.print_exc()
+        return jsonify(error=f"{type(e).__name__}: {e}"[:300]), 502
+
+
 def _mongo_settings():
     """Where a push would go. The connection string stays in the environment, never in the project."""
     import drive_store

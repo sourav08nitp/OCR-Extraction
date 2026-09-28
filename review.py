@@ -1178,6 +1178,37 @@ def ai_reread(job_dir, key):
     return out
 
 
+def repair_question_latex(job_dir, key, part):
+    """Fix notation in one review text field against the original PDF image."""
+    import ai_fallback
+
+    if part not in ("stem", "sol"):
+        raise ValueError("choose question or answer")
+    job_dir = Path(job_dir)
+    doc = ensure_current(job_dir)
+    _, q = find_question(doc, key)
+    field = "stemOverride" if part == "stem" else "solutionOverride"
+    section = "question" if part == "stem" else "solution"
+    saved = load_review(job_dir)
+    current = saved["questions"].get(key, {}).get(field)
+    if current is None:
+        current = _neutral(q[section])
+    if not q.get("regions"):
+        raise ValueError("The original PDF position is unavailable for this question")
+    source = region_png(job_dir / "input.pdf", q["regions"])
+    result = ai_fallback.repair_text_latex(source, current, "question" if part == "stem" else "answer")
+    saved = load_review(job_dir)  # the AI call can take time; keep unrelated edits made meanwhile
+    latest = saved["questions"].get(key, {}).get(field)
+    if latest is None:
+        latest = _neutral(q[section])
+    if latest != current:
+        raise ValueError("This text changed while AI was repairing it; retry with the latest version")
+    saved["questions"].setdefault(key, {})[field] = to_paren_delims(result["text"])
+    save_review(job_dir, saved)
+    return {"field": field, "text": saved["questions"][key][field],
+            "katexErrors": result["katexErrors"]}
+
+
 def ai_reread_all(job_dir, progress=None, workers=4, redo_edited=False):
     """AI-read every question of a job. Questions you already edited are left alone unless redo_edited."""
     from concurrent.futures import ThreadPoolExecutor

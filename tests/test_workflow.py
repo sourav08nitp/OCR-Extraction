@@ -217,6 +217,31 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('solutionOverride', saved['questions']['0-0'])
         self.assertEqual(saved['document'], before)
 
+    def test_fix_answer_latex_uses_pdf_and_keeps_question_edit(self):
+        path = self.job / 'out' / 'structured.json'
+        doc = json.loads(path.read_text(encoding='utf-8'))
+        doc['exercises'][0]['questions'][0]['regions'] = [{'page': 1, 'bbox': [10, 20, 200, 100]}]
+        path.write_text(json.dumps(doc), encoding='utf-8')
+        saved = review.load_review(self.job)
+        saved['questions']['0-0'] = {'stemOverride': 'My edited question',
+                                     'solutionOverride': '2Cu + O_2 \x1f Heat \x1e 2CuO'}
+        review.save_review(self.job, saved)
+        repaired = r'\(2\mathrm{Cu} + \mathrm{O}_2 \xrightarrow{\text{Heat}} 2\mathrm{CuO}\)'
+        with patch.object(review, 'region_png', return_value=b'original PDF pixels') as image, \
+             patch('ai_fallback.repair_text_latex', return_value={
+                 'text': repaired, 'katexErrors': []}) as ai, \
+             patch('ai_fallback.available', return_value=True):
+            response = self.client.post('/api/jobs/abc123/questions/0-0/fix-latex',
+                                        json={'part': 'sol'})
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.json['field'], 'solutionOverride')
+        self.assertEqual(response.json['text'], repaired)
+        ai.assert_called_once_with(b'original PDF pixels', '2Cu + O_2 \x1f Heat \x1e 2CuO', 'answer')
+        image.assert_called_once()
+        saved = review.load_review(self.job)['questions']['0-0']
+        self.assertEqual(saved['stemOverride'], 'My edited question')
+        self.assertEqual(saved['solutionOverride'], repaired)
+
     def test_unreadable_nonblank_selection_is_kept_as_image(self):
         import io
         from PIL import Image, ImageDraw

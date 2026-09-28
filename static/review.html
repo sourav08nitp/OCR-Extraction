@@ -226,7 +226,7 @@ function displayText(q, part) {
   }
   return text;
 }
-let editKey = null, aiBusy = null, tagBusy = null, extractBusy = null, imageBusy = null;
+let editKey = null, aiBusy = null, tagBusy = null, extractBusy = null, imageBusy = null, latexBusy = null;
 
 // effective value: question override, else document default, else automatic
 function eff(q, f) {
@@ -510,6 +510,28 @@ async function extractFromBox(key, part, bbox, page) {
     toast(`${part === 'stem' ? 'Question' : 'Answer'} text replaced from the selected box` + (warnings.length ? ` — ${warnings.join('; ')}` : ''));
   } catch (e) { toast('Could not extract: ' + e.message); }
   extractBusy = null;
+  drawQuestions({ anchorKey: key });
+}
+
+async function fixLatex(key, part) {
+  if (latexBusy) return;
+  stashTextEdit();
+  if (editKey === key) editKey = null;
+  clearTimeout(saveTimer);
+  if (!await save()) return;
+  latexBusy = { key, part };
+  drawQuestions({ anchorKey: key });
+  try {
+    const r = await fetch(`/api/jobs/${jobId}/questions/${encodeURIComponent(key)}/fix-latex`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ part }) });
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || r.statusText);
+    const q = data.questions.find(x => x.key === key);
+    if (q) q.manual[j.field] = j.text;
+    toast(`${part === 'stem' ? 'Question' : 'Answer'} notation repaired — compare it with the PDF`);
+    scheduleSave();
+  } catch (e) { toast('Could not fix LaTeX: ' + e.message); }
+  latexBusy = null;
   drawQuestions({ anchorKey: key });
 }
 
@@ -819,6 +841,8 @@ function questionBody(q) {
         ${data.aiAvailable ? `<button class="ghost" data-act="extract-stem" ${extractBusy ? 'disabled' : ''} title="Draw a PDF box; AI replaces only this question's question text">${extractBusy?.key === q.key && extractBusy.part === 'stem' ? 'Reading question…' : '✨ Extract → question'}</button>
         <button class="ghost" data-act="extract-sol" ${extractBusy ? 'disabled' : ''} title="Draw a PDF box; AI replaces only this question's answer text">${extractBusy?.key === q.key && extractBusy.part === 'sol' ? 'Reading answer…' : '✨ Extract → answer'}</button>` : ''}
         ${data.aiAvailable ? `<button class="ghost" data-act="ai" ${busy ? "disabled" : ""} title="Sends the highlighted box to the AI and replaces the question and solution text with its reading">${busy ? "Reading with AI…" : "✨ Re-read with AI"}</button>` : ""}
+        ${data.aiAvailable ? `<button class="ghost" data-act="latex-stem" ${latexBusy ? 'disabled' : ''} title="Repair only this question's formulas and broken symbols using the original PDF">${latexBusy?.key === q.key && latexBusy.part === 'stem' ? 'Fixing question…' : '✨ Fix question LaTeX'}</button>
+        <button class="ghost" data-act="latex-sol" ${latexBusy ? 'disabled' : ''} title="Repair only this answer's formulas and broken symbols using the original PDF">${latexBusy?.key === q.key && latexBusy.part === 'sol' ? 'Fixing answer…' : '✨ Fix answer LaTeX'}</button>` : ''}
         ${data.aiAvailable ? `<button class="ghost" data-act="tag" ${tagBusy === q.key ? "disabled" : ""} title="Asks the AI for this one question's topic (from the chapter's list) and difficulty level">${tagBusy === q.key ? "Choosing…" : "🏷 Topic &amp; level with AI"}</button>` : ""}
         ${edited(q) ? `<button class="ghost" data-act="reset" title="Throw away your edits / the AI reading">↺ Reset to automatic</button>` : ""}
         ${a.added ? `<button class="ghost danger" data-act="delete-added" title="Remove this question you added by hand">🗑 Delete question</button>` : ""}
@@ -933,6 +957,9 @@ async function questionAction(btn) {
     toast("Image removed — ↺ Reset to automatic brings it back");
   } else if (a === "extract-stem" || a === "extract-sol") {
     startExtract(q.key, a === 'extract-stem' ? 'stem' : 'sol');
+    return;
+  } else if (a === "latex-stem" || a === "latex-sol") {
+    await fixLatex(q.key, a === 'latex-stem' ? 'stem' : 'sol');
     return;
   } else if (a === "crop-stem" || a === "crop-sol") {
     startCrop(q.key, a === "crop-stem" ? "stem" : "sol");
