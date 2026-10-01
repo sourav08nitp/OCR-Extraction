@@ -26,7 +26,7 @@ MANUAL_FIELDS = ["topic", "level", "questionType", "sectionName", "isPyq", "pyqE
 # edited text refers to images as ![](img:NAME); they become real URLs on screen and in the export
 IMG_REF = re.compile(r"!\[\]\(img:([^)\s]+)\)")
 # document-level settings shown on the Document tab
-DOC_FIELDS = ["documentId", "sessionId", "driveFileId", "projectId", "module", "chapter", "subject", "exam", "section", "sectionName", "questionType", "level",
+DOC_FIELDS = ["documentId", "sessionId", "driveFileId", "projectId", "module", "chapter", "subject", "className", "exam", "section", "sectionName", "questionType", "level",
               "topic", "isPyq", "pyqExam", "pyqYear", "paper", "answerFrom", "imageBaseUrl",
               "syllabusChapter", "topics"]
 TOPICS_FILE = Path(__file__).resolve().parent / "topics.json"
@@ -99,6 +99,49 @@ def _key_labels(doc):
     return {key: f"{ex['title']}|{q.get('label', q['number'])}" for key, ex, q in questions(doc)}
 
 
+def _matching_question_keys(before_doc, after_doc):
+    """Match original questions after section boundaries change during a re-split."""
+    old = questions(before_doc)
+    new = questions(after_doc)
+    matched, used = {}, set()
+
+    def signature(ex, q, mode):
+        label = str(q.get("label", q.get("number", ""))).upper()
+        page = q.get("page_start") or (q.get("regions") or [{}])[0].get("page")
+        stem = re.sub(r"\s+", " ", q.get("question", {}).get("text", "")).strip()[:160]
+        if mode == "page-stem":
+            return label, page, stem
+        if mode == "page":
+            return label, page
+        if mode == "section-stem":
+            return ex["title"], label, stem
+        return ex["title"], label
+
+    for mode in ("page-stem", "page", "section-stem", "section"):
+        for old_key, old_ex, old_q in old:
+            if old_key in matched:
+                continue
+            identity = signature(old_ex, old_q, mode)
+            candidates = [key for key, ex, q in new
+                          if key not in used and signature(ex, q, mode) == identity]
+            if len(candidates) == 1:
+                matched[old_key] = candidates[0]
+                used.add(candidates[0])
+    return matched
+
+
+def _has_embedded_additional_questions(doc):
+    """Older parsing placed the A-series heading and questions inside a preceding answer."""
+    for _, _, q in questions(doc):
+        for part in ("question", "solution"):
+            raw = q.get(part, {}).get("text", "")
+            if re.search(r"(?im)^\s*Additional Exercises\s*$", raw):
+                return True
+            if re.search(r"(?im)^\s*Question\s+A\d+\s*:", raw):
+                return True
+    return False
+
+
 def deduplicate_saved_images(job_dir, doc):
     """Repair existing results and corresponding text edits; retain recovery copies."""
     job_dir = Path(job_dir)
@@ -139,23 +182,30 @@ def ensure_current(job_dir):
     doc = _load(out / "structured.json", None)
     if doc is None:
         raise FileNotFoundError("no result for this job")
+    if doc.get("structure_version") == 7 and not _has_embedded_additional_questions(doc):
+        # Version 8 only changes A-series boundaries. Do not re-read unrelated
+        # PDFs, which may include AI-recovered questions not present in PDF text.
+        doc["structure_version"] = pts.STRUCTURE_VERSION
+        (out / "structured.json").write_text(json.dumps(doc, indent=2, ensure_ascii=False),
+                                               encoding="utf-8")
     if doc.get("structure_version") != pts.STRUCTURE_VERSION:
-        before = _key_labels(doc)
+        old_doc = doc
         doc = pts.restructure(job_dir / "input.pdf", out)
         review = load_review(job_dir)
         if review["questions"] or review["ids"]:
-            after = {v: k for k, v in _key_labels(doc).items()}   # label -> new key
+            key_map = _matching_question_keys(old_doc, doc)
+            labels = _key_labels(old_doc)
             moved = {"questions": {}, "ids": {}, "lost": {}}
             for field in ("questions", "ids"):   # add-* keys are ours, not the PDF's: carry them over as they are
                 moved[field].update({k: v for k, v in review[field].items() if k.startswith("add-")})
-            for old_key, label in before.items():
-                new_key = after.get(label)
+            for old_key, label in labels.items():
+                new_key = key_map.get(old_key)
                 for field in ("questions", "ids"):
                     if old_key in review[field]:
                         if new_key:
                             moved[field][new_key] = review[field][old_key]
                         elif field == "questions":
-                            moved["lost"][label] = review[field][old_key]
+                            moved["lost"][f"{label}|{old_key}"] = review[field][old_key]
             review["questions"], review["ids"] = moved["questions"], moved["ids"]
             if moved["lost"]:
                 review.setdefault("orphanedEdits", {}).update(moved["lost"])
@@ -465,6 +515,7 @@ def build_record(doc, key, ex, q, review, image_url, now, px_size=None):
         "sectionName": _pick(m, d, a, "sectionName"),
         "topic": _pick(m, d, a, "topic"),
         "subject": d.get("subject") or None,
+        "className": d.get("className") or None,
         "exam": normalize_exam(d.get("exam")),
         "flagged": bool(m["flagged"]) if m.get("flagged") is not None else a["flagged"],
         "isPyq": bool(is_pyq) if is_pyq is not None else False,
@@ -961,24 +1012,39 @@ def crop_region(job_dir, key, part, page, bbox_norm):
 
 def extract_region(job_dir, key, part, page, bbox_norm):
     """Read a selected PDF box into one existing question part, keeping the other part intact."""
+    return extract_regions(job_dir, key, part, [{"page": page, "bbox": bbox_norm}])
+
+
+def extract_regions(job_dir, key, part, regions):
+    """Read ordered PDF selections, including continuations on later pages, as one question part."""
     import math
     import ai_fallback
 
     if part not in ("stem", "sol"):
         raise ValueError("choose question or answer")
-    if len(bbox_norm) != 4 or any(not math.isfinite(v) or not 0 <= v <= 1 for v in bbox_norm):
-        raise ValueError("selection must be four coordinates within the page")
+    if not isinstance(regions, list) or not 1 <= len(regions) <= 8:
+        raise ValueError("select between 1 and 8 PDF areas")
     job_dir = Path(job_dir)
     doc = ensure_current(job_dir)
     _, q = find_question(doc, key)
     sizes = {int(k): v for k, v in doc.get("page_sizes", {}).items()}
-    if page not in sizes:
-        raise ValueError(f"page {page} is not in this PDF")
-    w, h = sizes[page]
-    x0, y0, x1, y1 = bbox_norm
-    box = [min(x0, x1) * w, min(y0, y1) * h, max(x0, x1) * w, max(y0, y1) * h]
-    if box[2] - box[0] < 5 or box[3] - box[1] < 5:
-        raise ValueError("that selection is too small to read")
+    selected = []
+    for region in regions:
+        if not isinstance(region, dict):
+            raise ValueError("each PDF selection needs a page and box")
+        page, bbox_norm = region.get("page"), region.get("bbox")
+        if type(page) is not int or page not in sizes:
+            raise ValueError(f"page {page} is not in this PDF")
+        if (not isinstance(bbox_norm, (list, tuple)) or len(bbox_norm) != 4 or
+                any(not isinstance(v, (int, float)) or not math.isfinite(v) or not 0 <= v <= 1
+                    for v in bbox_norm)):
+            raise ValueError("selection must be four coordinates within the page")
+        w, h = sizes[page]
+        x0, y0, x1, y1 = bbox_norm
+        box = [min(x0, x1) * w, min(y0, y1) * h, max(x0, x1) * w, max(y0, y1) * h]
+        if box[2] - box[0] < 5 or box[3] - box[1] < 5:
+            raise ValueError("that selection is too small to read")
+        selected.append({"page": page, "bbox": box})
     saved = load_review(job_dir)
     field = "stemOverride" if part == "stem" else "solutionOverride"
     original = saved["questions"].get(key, {}).get(field)
@@ -990,13 +1056,15 @@ def extract_region(job_dir, key, part, page, bbox_norm):
     figures = []
     for name in candidates:
         b = boxes.get(name)
-        if not b or b["page"] != page or (info.get(name, {}).get("source") != "figure" and name not in saved["manualImages"]):
+        if not b or (info.get(name, {}).get("source") != "figure" and name not in saved["manualImages"]):
             continue
         bx0, by0, bx1, by1 = b["bbox"]
-        if box[0] <= (bx0 + bx1) / 2 <= box[2] and box[1] <= (by0 + by1) / 2 <= box[3]:
+        if any(r["page"] == b["page"] and r["bbox"][0] <= (bx0 + bx1) / 2 <= r["bbox"][2]
+               and r["bbox"][1] <= (by0 + by1) / 2 <= r["bbox"][3] for r in selected):
             figures.append(name)
-    selected_png = region_png(job_dir / "input.pdf", [{"page": page, "bbox": box}], pad=0)
-    result = ai_fallback.transcribe_region(selected_png, len(figures), part=part)
+    selected_png = region_png(job_dir / "input.pdf", selected, pad=0)
+    ai_options = {"segments": len(selected)} if len(selected) > 1 else {}
+    result = ai_fallback.transcribe_region(selected_png, len(figures), part=part, **ai_options)
     text = "\n\n".join(t.strip() for t in (result["question"], result["solution"]) if t.strip())
     if not text:
         from PIL import Image
@@ -1008,30 +1076,34 @@ def extract_region(job_dir, key, part, page, bbox_norm):
             raise ValueError("The selected area appears blank; the question was left unchanged")
         text = "[[FIGURE]]"  # retain an unreadable but nonblank crop rather than erase it
     missing_figures = max(0, text.count("[[FIGURE]]") - len(figures))
-    new_figure_name = None
+    new_figure_names = []
     if missing_figures:
-        # The OCR pass never identified this picture. Keep the actual selected source
-        # image beside the AI text instead of silently dropping its [[FIGURE]] marker.
-        # The selected crop contains every otherwise untracked figure in this box.
+        # Keep the selected source pixels if AI found a figure not already tracked.
+        # For several pages, retain each crop with its own correct PDF coordinates.
         saved = load_review(job_dir)
         n = 1 + len(saved["manualImages"])
-        new_figure_name = f"manual_{n:03d}.png"
-        while (job_dir / "out" / "images" / new_figure_name).exists():
+        for region in selected:
+            name = f"manual_{n:03d}.png"
+            while (job_dir / "out" / "images" / name).exists() or name in new_figure_names:
+                n += 1
+                name = f"manual_{n:03d}.png"
+            new_figure_names.append(name)
+            figures.append(name)
             n += 1
-            new_figure_name = f"manual_{n:03d}.png"
-        figures.append(new_figure_name)
     text = to_paren_delims(place_figures(text, original, figures))
     if not text.strip():
         raise ValueError("AI found no readable text in that selection; the question was left unchanged")
     saved = load_review(job_dir)
-    if new_figure_name:
-        (job_dir / "out" / "images" / new_figure_name).write_bytes(selected_png)
-        saved["manualImages"][new_figure_name] = {"page": page, "bbox": [round(v, 1) for v in box]}
+    for name, region in zip(new_figure_names, selected):
+        png = selected_png if len(selected) == 1 else region_png(job_dir / "input.pdf", [region], pad=0)
+        (job_dir / "out" / "images" / name).write_bytes(png)
+        saved["manualImages"][name] = {"page": region["page"],
+                                       "bbox": [round(v, 1) for v in region["bbox"]]}
     manual = saved["questions"].setdefault(key, {})
     manual[field] = text
     save_review(job_dir, saved)
     return {"field": field, "text": manual[field], "katexErrors": result["katexErrors"],
-            "missingFigures": 0 if new_figure_name else missing_figures}
+            "missingFigures": 0 if new_figure_names else missing_figures}
 
 
 def transcribe_question_image(job_dir, key, part, name, page, bbox_norm):

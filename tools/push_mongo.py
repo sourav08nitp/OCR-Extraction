@@ -254,6 +254,7 @@ def push_document(records, database, *, file_name, session_id=None, drive_file_i
         "questionType": max(set(kinds), key=kinds.count) if kinds else None,
         "sectionName": "All sections",
         "subject": first.get("subject"),
+        "className": first.get("className"),
         "exam": normalize_exam(first.get("exam")),
         "pyq": any(r.get("isPyq") for r in records),
         "pyqExam": None,

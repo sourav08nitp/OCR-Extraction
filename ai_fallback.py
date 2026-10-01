@@ -252,13 +252,18 @@ def _vision_image(png_bytes, *, margin=True):
         "detail": detail}}
 
 
-def transcribe_region(png_bytes, n_figures=0, part=None):
+def transcribe_region(png_bytes, n_figures=0, part=None, segments=1):
     r"""One whole question (its highlighted box) -> {"question", "solution", "katexErrors"} with \(...\) maths."""
     client = create_client(timeout=120)
     prompt = REGION_PROMPT
     if part in ("stem", "sol"):
         field = "question" if part == "stem" else "solution"
         prompt = CROP_PROMPT.format(field=field)
+    if segments > 1:
+        prompt += (f"\nThis image stacks {segments} selected PDF areas in the order the user chose them. "
+                   "They are consecutive pieces of ONE question or answer, possibly from different pages. "
+                   "Read every piece from top to bottom, join the text in that order, and do not omit "
+                   "the end of one piece or the beginning of the next. Do not repeat overlapping lines.")
     if n_figures:
         prompt += f"\nThe current extraction found {n_figures} figure(s); keep their positions in the text."
     content = [{"type": "text", "text": prompt},
@@ -305,6 +310,9 @@ def repair_text_latex(png_bytes, current_text, part):
     def prose_words(value):
         plain = RE_MATH.sub(" ", value)
         plain = re.sub(r"!\[\]\([^)]+\)", " ", plain)
+        # Existing review text can contain bare LaTeX. Commands such as \frac
+        # are notation, not prose that the repaired version must repeat.
+        plain = re.sub(r"\\[A-Za-z]+\*?", " ", plain)
         return Counter(re.findall(r"[a-z]{3,}", plain.lower()))
 
     original_words = prose_words(current_text)

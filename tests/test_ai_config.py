@@ -90,6 +90,47 @@ class AIKeyConfigurationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'image reference'):
                 ai_fallback.repair_text_latex(self._png(), 'Original ![](img:source.png)', 'answer')
 
+    def test_latex_repair_does_not_count_raw_commands_as_missing_prose(self):
+        before = (
+            r'Sol. Let originally the diameter of the sphere be 2r.' '\n'
+            r'Surface area of the sphere = 4\pi r^2.' '\n'
+            r'New diameter of the sphere = 2r - 2r \times \frac{25}{100} = \frac{3r}{2}' '\n'
+            r'New radius of the sphere = \frac{3r}{4}' '\n'
+            r'Surface area of the new sphere = 4\pi\left(\frac{3r}{4}\right)^2 = \frac{9\pi r^2}{4}' '\n'
+            r'Decrease in surface area = 4\pi r^2 - \frac{9\pi r^2}{4} = \frac{7\pi r^2}{4}' '\n'
+            r'Per cent decrease = \frac{\frac{7\pi r^2}{4}}{4\pi r^2} \times 100 = \frac{7}{16} \times 100 = \frac{175}{4} = 43.75' '\n'
+            r'Hence, the surface area decreases by 43.75% Ans.')
+        fixed = (
+            r'Sol. Let originally the diameter of the sphere be \(2r\).' '\n'
+            r'Surface area of the sphere = \(4\pi r^2\).' '\n'
+            r'New diameter of the sphere = \(2r - 2r \times \frac{25}{100} = \frac{3r}{2}\)' '\n'
+            r'New radius of the sphere = \(\frac{3r}{4}\)' '\n'
+            r'Surface area of the new sphere = \(4\pi\left(\frac{3r}{4}\right)^2 = \frac{9\pi r^2}{4}\)' '\n'
+            r'Decrease in surface area = \(4\pi r^2 - \frac{9\pi r^2}{4} = \frac{7\pi r^2}{4}\)' '\n'
+            r'Per cent decrease = \(\frac{\frac{7\pi r^2}{4}}{4\pi r^2} \times 100 = \frac{7}{16} \times 100 = \frac{175}{4} = 43.75\)' '\n'
+            r'Hence, the surface area decreases by 43.75% Ans.')
+        client = Mock()
+        client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(finish_reason='stop', message=SimpleNamespace(
+                content=json.dumps({'text': fixed})))], usage=None)
+        with patch.object(ai_fallback, 'create_client', return_value=client), \
+             patch.object(ai_fallback, 'katex_errors', return_value=[None] * 8), \
+             patch.object(ai_fallback, 'note_usage'):
+            result = ai_fallback.repair_text_latex(self._png(), before, 'answer')
+        self.assertEqual(result['text'], fixed)
+        self.assertEqual(client.chat.completions.create.call_count, 1)
+
+    def test_latex_repair_still_rejects_real_prose_omission(self):
+        before = 'The printed solution explains why the surface area of the sphere decreases after its diameter changes.'
+        client = Mock()
+        client.chat.completions.create.return_value = SimpleNamespace(
+            choices=[SimpleNamespace(finish_reason='stop', message=SimpleNamespace(
+                content=json.dumps({'text': 'The sphere decreases.'})))], usage=None)
+        with patch.object(ai_fallback, 'create_client', return_value=client), \
+             patch.object(ai_fallback, 'note_usage'):
+            with self.assertRaisesRegex(ValueError, 'omitted too much'):
+                ai_fallback.repair_text_latex(self._png(), before, 'answer')
+
     def test_old_key_alone_does_not_enable_ai(self):
         with patch.dict(os.environ, {"OPENAI_API_KEY": "old-test-key"}, clear=True):
             self.assertFalse(ai_fallback.available())

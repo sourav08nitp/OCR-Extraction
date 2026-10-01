@@ -1,5 +1,6 @@
 """Final sign-off and database tracking, using temporary jobs and a mocked database."""
 import json
+import io
 import tempfile
 import unittest
 from pathlib import Path
@@ -41,6 +42,116 @@ class WorkflowTests(unittest.TestCase):
         response = self.client.post('/api/jobs/abc123/finalize')
         self.assertEqual(response.status_code, 200, response.json)
         self.assertEqual(response.json['workflow']['stage'], 'ready')
+
+    def test_additional_exercises_are_separate_questions_and_keep_review_edits(self):
+        texts = [
+            'Question 4: Earlier question', 'Answer 4: Earlier answer',
+            'Additional Exercises', 'Question A1: First extra question',
+            'Answer A1: First extra answer', 'Question A2: Second extra question',
+            'Answer A2: Second extra answer', 'Exercise',
+            'Question 1: Regular question', 'Answer 1: Regular answer',
+        ]
+        lines = [{'page': 1 if i < 3 else 2 if i < 7 else 3,
+                  'text': value, 'x0': 10, 'x1': 200, 'top': i * 10,
+                  'bottom': i * 10 + 8} for i, value in enumerate(texts)]
+        doc = app.pdf_to_structured.structure(lines)
+        self.assertEqual([(ex['title'], [q['label'] for q in ex['questions']])
+                          for ex in doc['exercises']],
+                         [('UNKNOWN', ['4']), ('ADDITIONAL EXERCISES', ['A1', 'A2']),
+                          ('EXERCISE', ['1'])])
+        self.assertEqual(doc['exercises'][1]['questions'][0]['solution']['text'],
+                         'First extra answer')
+        self.assertEqual(doc['exercises'][0]['questions'][0]['solution']['text'],
+                         'Earlier answer')
+        old = {'exercises': [{'title': 'UNKNOWN', 'questions': [
+            doc['exercises'][0]['questions'][0], doc['exercises'][2]['questions'][0]]}]}
+        self.assertEqual(review._matching_question_keys(old, doc),
+                         {'0-0': '0-0', '0-1': '2-0'})
+
+    def test_unrelated_version_7_result_is_not_resplit(self):
+        path = self.job / 'out' / 'structured.json'
+        doc = json.loads(path.read_text(encoding='utf-8'))
+        doc['structure_version'] = 7
+        doc['ai_recovered_marker'] = 'keep'
+        doc['exercises'][0]['questions'][0]['page_start'] = 1
+        path.write_text(json.dumps(doc), encoding='utf-8')
+        with patch.object(review.pts, 'restructure') as resplit:
+            result = review.ensure_current(self.job)
+        resplit.assert_not_called()
+        self.assertEqual(result['ai_recovered_marker'], 'keep')
+        self.assertEqual(result['structure_version'], review.pts.STRUCTURE_VERSION)
+
+    def test_upload_warns_before_creating_duplicate_drive_file_or_session(self):
+        pdf = b'%PDF-1.4\nexisting chapter\n%%EOF'
+        (self.job / 'input.pdf').write_bytes(pdf)
+        inputs = self.root / 'inputs'
+        inputs.mkdir()
+        with patch.object(app, 'TEMP_INPUT_DIR', inputs), \
+             patch('drive_store.configured', return_value=True), \
+             patch('drive_store.upload_pdf') as drive_upload, \
+             patch('ocr_store.create_session') as create_session:
+            response = self.client.post('/api/upload', data={'pdf': (io.BytesIO(pdf), 'Again.pdf')})
+        self.assertEqual(response.status_code, 409, response.json)
+        self.assertEqual(response.json['duplicate']['job_id'], 'abc123')
+        self.assertEqual(response.json['duplicate']['match'], 'content')
+        self.assertEqual(list(inputs.iterdir()), [])
+        drive_upload.assert_not_called()
+        create_session.assert_not_called()
+
+    def test_failed_windows_link_can_resume_existing_drive_upload(self):
+        orphan = self.root / 'orphan123'
+        orphan.mkdir()
+        inputs = self.root / 'inputs'
+        inputs.mkdir()
+        source = inputs / 'orphan123.pdf'
+        source.write_bytes(b'%PDF-1.4\nrecovered\n%%EOF')
+        session = {'label': 'OCR · Chapter 01 - Matter.pdf', 'projectId': None,
+                   'driveFileId': 'existing-drive-file', 'status': 'extracting'}
+        with patch.object(app, 'TEMP_INPUT_DIR', inputs), \
+             patch.object(Path, 'symlink_to', side_effect=OSError('Windows privilege denied')), \
+             patch('ocr_store.get_session', return_value=session), \
+             patch('drive_store.upload_pdf') as drive_upload, \
+             patch.object(app.work, 'put') as enqueue:
+            self.assertEqual(app._resume_incomplete_uploads(), 1)
+            self.assertTrue((orphan / 'input.pdf').samefile(source))
+            self.assertEqual(app._meta('orphan123')['filename'], 'Chapter 01 - Matter.pdf')
+            self.assertEqual(app._meta('orphan123')['driveFileId'], 'existing-drive-file')
+            enqueue.assert_called_once_with('orphan123')
+            drive_upload.assert_not_called()
+            self.assertTrue(app._discard_source('orphan123', {'tempPdf': str(source)}))
+            self.assertFalse((orphan / 'input.pdf').exists())
+            del app.jobs['orphan123']
+            enqueue.reset_mock()
+            self.assertEqual(app._resume_incomplete_uploads(), 1)
+            enqueue.assert_called_once_with('orphan123')
+            drive_upload.assert_not_called()
+
+    def test_same_filename_with_different_pdf_is_allowed_and_repeat_can_be_forced(self):
+        existing = b'%PDF-1.4\nold content\n%%EOF'
+        replacement = b'%PDF-1.4\nnew content\n%%EOF'
+        (self.job / 'input.pdf').write_bytes(existing)
+        (self.job / 'meta.json').write_text(json.dumps({'filename': 'Test.pdf'}), encoding='utf-8')
+        inputs = self.root / 'inputs'
+        inputs.mkdir()
+        self.assertIsNone(app._duplicate_pdf(app.hashlib.sha256(replacement).hexdigest(),
+                                              len(replacement), 'Test.pdf'))
+        (self.job / 'input.pdf').unlink()
+        self.assertEqual(app._duplicate_pdf(app.hashlib.sha256(replacement).hexdigest(),
+                                            len(replacement), 'Test.pdf')['match'], 'filename')
+        with patch.object(app, 'TEMP_INPUT_DIR', inputs), \
+             patch.object(app, '_link_source'), \
+             patch.object(app.work, 'put'), \
+             patch('drive_store.configured', return_value=True), \
+             patch('drive_store.upload_pdf', return_value='drive-new') as drive_upload, \
+             patch('ocr_store.create_session'), \
+             patch('ocr_store.update_session'):
+            response = self.client.post('/api/upload', data={
+                'pdf': (io.BytesIO(existing), 'Test.pdf'), 'allowDuplicate': '1'})
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.json['driveFileId'], 'drive-new')
+        drive_upload.assert_called_once()
+        meta = app._meta(response.json['job_id'])
+        self.assertEqual(meta['pdfSha256'], app.hashlib.sha256(existing).hexdigest())
 
     def test_existing_local_pdf_jobs_remain_visible_and_readable(self):
         legacy = self.root / 'legacy' / 'old123'
@@ -232,6 +343,43 @@ class WorkflowTests(unittest.TestCase):
         self.assertNotIn('solutionOverride', saved['questions']['0-0'])
         self.assertEqual(saved['document'], before)
 
+    def test_multi_page_answer_crops_are_read_together_in_selection_order(self):
+        path = self.job / 'out' / 'structured.json'
+        doc = json.loads(path.read_text(encoding='utf-8'))
+        doc['page_sizes'] = {'1': [600, 800], '2': [600, 800]}
+        path.write_text(json.dumps(doc), encoding='utf-8')
+        selections = [{'page': 1, 'bbox': [.1, .2, .8, .6]},
+                      {'page': 2, 'bbox': [.1, .1, .7, .4]}]
+        with patch.object(review, 'region_png', return_value=b'ordered PDF crops') as crop, \
+             patch('ai_fallback.transcribe_region', return_value={
+                 'question': '', 'solution': 'First page\nNext page', 'katexErrors': []}) as ai:
+            response = self.client.post('/api/jobs/abc123/questions/0-0/extract',
+                                        json={'part': 'sol', 'regions': selections})
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(response.json['text'], 'First page\nNext page')
+        self.assertEqual(review.load_review(self.job)['questions']['0-0']['solutionOverride'],
+                         'First page\nNext page')
+        self.assertNotIn('stemOverride', review.load_review(self.job)['questions']['0-0'])
+        crop.assert_called_once_with(self.job / 'input.pdf', [
+            {'page': 1, 'bbox': [60, 160, 480, 480]},
+            {'page': 2, 'bbox': [60, 80, 420, 320]}], pad=0)
+        ai.assert_called_once_with(b'ordered PDF crops', 0, part='sol', segments=2)
+
+    def test_multi_crop_rejects_bad_page_without_changing_answer(self):
+        path = self.job / 'out' / 'structured.json'
+        doc = json.loads(path.read_text(encoding='utf-8'))
+        doc['page_sizes'] = {'1': [600, 800]}
+        path.write_text(json.dumps(doc), encoding='utf-8')
+        before = review.load_review(self.job)
+        with patch('ai_fallback.transcribe_region') as ai:
+            response = self.client.post('/api/jobs/abc123/questions/0-0/extract',
+                                        json={'part': 'sol', 'regions': [
+                                            {'page': 1, 'bbox': [.1, .2, .8, .6]},
+                                            {'page': 2, 'bbox': [.1, .1, .7, .4]}]})
+        self.assertEqual(response.status_code, 400)
+        ai.assert_not_called()
+        self.assertEqual(review.load_review(self.job), before)
+
     def test_fix_answer_latex_uses_pdf_and_keeps_question_edit(self):
         path = self.job / 'out' / 'structured.json'
         doc = json.loads(path.read_text(encoding='utf-8'))
@@ -418,6 +566,27 @@ class WorkflowTests(unittest.TestCase):
         saved['document']['exam'] = ''
         review.save_review(self.job, saved)
         self.assertIsNone(review.export(self.job)[0]['exam'])
+
+    def test_class_name_is_saved_exported_and_pushed_with_document(self):
+        from tools import push_mongo
+
+        saved = review.load_review(self.job)
+        saved['document']['className'] = 'Class 10'
+        response = self.client.put('/api/jobs/abc123/review', json={
+            'document': saved['document'], 'questions': saved['questions']})
+        self.assertEqual(response.status_code, 200, response.json)
+        self.assertEqual(review.load_review(self.job)['document']['className'], 'Class 10')
+        record = review.export(self.job)[0]
+        self.assertEqual(record['className'], 'Class 10')
+        self.assertEqual(push_mongo.to_document(record)['className'], 'Class 10')
+        database = MagicMock()
+        database['ingest_extracted_questions'].bulk_write.return_value = Mock(upserted_count=1, modified_count=0)
+        push_mongo.push_records([record], database=database, collection='ingest_extracted_questions',
+                                write=True, images='skip', file_name='Test.pdf')
+        question_update = database['ingest_extracted_questions'].bulk_write.call_args.args[0][0]
+        self.assertEqual(question_update._doc['$set']['className'], 'Class 10')
+        chapter_update = database['ingest_documents'].update_one.call_args.args[1]
+        self.assertEqual(chapter_update['$set']['className'], 'Class 10')
 
     def test_legacy_board_exam_is_normalized(self):
         from tools import push_mongo

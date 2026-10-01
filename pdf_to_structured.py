@@ -31,11 +31,11 @@ DPI = 200                 # resolution of cropped equation images
 MIN_IMG_SIZE = 4          # ignore tiny decorative images (points)
 PAD = 0                   # padding around each crop (points)
 
-RE_EXERCISE = re.compile(r"^(EXERCISE\s+[\d.]+|MISCELLANEOUS EXERCISE)\b", re.I)
-# "Question 5:", "Question 4.1:", "Ques. 3", "Q.7" ; the full label (e.g. "4.1") is kept
-RE_QUESTION = re.compile(r"^(?:Question|Ques\.?|Q\.)\s*(\d+(?:\.\d+)*)\s*[:.)]?", re.I)
+RE_EXERCISE = re.compile(r"^(EXERCISE\s+[\d.]+|MISCELLANEOUS EXERCISE|ADDITIONAL EXERCISES)\b|^(EXERCISE)\s*$", re.I)
+# "Question 5:", "Question 4.1:", "Question A1:", "Ques. 3", "Q.7".
+RE_QUESTION = re.compile(r"^(?:Question|Ques\.?|Q\.)\s*([A-Z]?\d+(?:\.\d+)*)\s*[:.)]?", re.I)
 # "Solution:", "Answer 14:", "Answer" alone, "Ans.", "Sol." -- but not prose like "Answer the following"
-RE_SOLUTION = re.compile(r"^(?:(Solution|Answer|Sol|Ans)\s*(?:\d+(?:\.\d+)*)?\s*(?::|-|$)|(Sol|Ans)\.)", re.I)
+RE_SOLUTION = re.compile(r"^(?:(Solution|Answer|Sol|Ans)\s*(?:[A-Z]?\d+(?:\.\d+)*)?\s*(?::|-|$)|(Sol|Ans)\.)", re.I)
 RE_CHAPTER = re.compile(r"^Chapter\s+\d+.*", re.I)
 RE_LEADING_IMAGES = re.compile(r"^(?:\[\[eq:[^\]]+\]\]\s*)+")
 RE_PAGE_NUMBER = re.compile(r"(?:page\s*)?[-–(]?\s*\d{1,4}\s*[-–)]?(?:\s*(?:of|/)\s*\d{1,4})?", re.I)
@@ -313,7 +313,7 @@ def structure(lines):
 
         m = RE_EXERCISE.match(text)
         if m:
-            exercise = {"title": m.group(1).upper(), "questions": []}
+            exercise = {"title": (m.group(1) or m.group(2)).upper(), "questions": []}
             doc["exercises"].append(exercise)
             question, section = None, None
             continue
@@ -325,7 +325,7 @@ def structure(lines):
                 doc["exercises"].append(exercise)
             label = m.group(1)
             question = {
-                "number": int(label.split(".")[-1]),
+                "number": int(re.search(r"\d+$", label).group()),
                 "label": label,
                 "page_start": ln["page"],
                 "question": [],
@@ -679,7 +679,7 @@ def to_markdown(doc):
     for ex in doc["exercises"]:
         out.append(f"\n## {ex['title']}\n")
         for q in ex["questions"]:
-            out.append(f"\n### Question {q['number']}  (page {q['page_start']})\n")
+            out.append(f"\n### Question {q.get('label', q['number'])}  (page {q['page_start']})\n")
             for key, label in (("question", "**Question**"), ("solution", "**Solution**")):
                 src = q[key].get("text_latex", q[key]["text"])
                 body = re.sub(r"\[\[eq:([^\]]+)\]\]", r"![](images/\1)", src)
@@ -700,7 +700,8 @@ def run(pdf_path, out_dir, want_latex=False, progress=_print_progress, model=Non
     return doc
 
 
-STRUCTURE_VERSION = 7  # 6: headings behind a bullet image; 7: pages split into image strips count as scanned
+STRUCTURE_VERSION = 8  # 8: Additional Exercises and letter-prefixed question labels
+#                        6: headings behind a bullet image; 7: pages split into image strips count as scanned
 #                        4: tall figures get their own line instead of swallowing the text beside them
 
 

@@ -38,6 +38,11 @@
   header .spacer { flex: 1; }
   .progress { font-size: 13px; color: var(--muted); }
   .progress b { color: var(--ink); }
+  .progress .question-link { padding: 0 2px; background: none; border: 0; border-radius: 0;
+                             font: inherit; text-decoration: underline; text-underline-offset: 2px; }
+  .progress .question-link.need { color: var(--warn); }
+  .progress .question-link.flag { color: var(--err); }
+  .progress .question-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
   #saveState { font-size: 12px; color: var(--muted); min-width: 70px; }
 
   .split { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
@@ -51,8 +56,11 @@
   .hl { position: absolute; background: var(--hl); border: 2px solid var(--hl-line); border-radius: 3px; pointer-events: none; }
   .pagewrap.cropping { cursor: crosshair; }
   .pagewrap.cropping .hl { opacity: .3; }
-  .selbox { position: absolute; border: 2px dashed var(--accent); background: rgba(47, 93, 80, .18); pointer-events: none; }
+  .selbox { position: absolute; box-sizing: border-box; border: 2px dashed var(--accent); background: rgba(47, 93, 80, .18); pointer-events: none; }
   .crophint { padding: 7px 12px; background: var(--accent); color: var(--panel); font-size: 13px; font-weight: 600; }
+  .crophint.multi { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+  .crophint.multi button { padding: 4px 10px; }
+  .queued-crop { position: absolute; border: 2px solid #e9a23b; background: rgba(233, 162, 59, .15); pointer-events: none; }
 
   .side { display: flex; flex-direction: column; min-height: 0; }
   .tabs { display: flex; gap: 4px; padding: 8px 12px 0; border-bottom: 1px solid var(--line); }
@@ -165,6 +173,7 @@
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const jobId = (location.hash.match(/job=([a-f0-9]+)/) || [])[1];
+const requestedQuestionKey = new URLSearchParams(location.hash.slice(1)).get("question");
 let data = null, tab = "questions", filter = "all", openKey = null;
 const expandedKeys = new Set();
 
@@ -196,7 +205,7 @@ function renderRich(text, part, sources = []) {
     if (m) {
       const img = `<img src="${esc(imgSrc(m[1]))}" alt="image" loading="lazy">`;
       const convert = part && m[1].startsWith("img:") && data.aiAvailable
-        ? `<button class="ghost image-ai" data-act="image-ai" data-part="${part}" data-name="${esc(m[1].slice(4))}" ${imageBusy ? 'disabled' : ''} title="Draw a PDF box; AI replaces only this image with text and maths">${imageBusy?.name === m[1].slice(4) ? 'Reading selected area…' : '✨ Select PDF area → AI text'}</button>` : '';
+        ? `<button class="ghost image-ai" data-act="image-ai" data-part="${part}" data-name="${esc(m[1].slice(4))}" ${imageBusy ? 'disabled' : ''} title="AI replaces this image with text and maths using its saved PDF position">${imageBusy?.name === m[1].slice(4) ? 'Reading image…' : '✨ Convert image to AI text'}</button>` : '';
       return part ? `<span class="imgwrap">${img}<button class="rm" data-act="rm" data-part="${part}" data-ref="${esc(m[1])}" title="Remove this image from the question">✕</button>${convert}</span>` : img;
     }
     return esc(p).replace(/\n/g, "<br>");
@@ -361,6 +370,7 @@ async function showPage(n, regions) {
     const sc = $("pdfScroll");
     sc.scrollTop += first.getBoundingClientRect().top - sc.getBoundingClientRect().top - 40;
   } else if (changed) $("pdfScroll").scrollTop = 0;
+  renderQueuedCrops();
 }
 $("prevPg").onclick = () => showPage(pageNo - 1);
 $("nextPg").onclick = () => showPage(pageNo + 1);
@@ -370,6 +380,41 @@ window.addEventListener("resize", () => { clearTimeout(window._rz); window._rz =
 
 // ---------------- crop a piece of the PDF into a question ----------------
 let cropMode = null;
+
+function renderQueuedCrops() {
+  const wrap = $("pageWrap");
+  wrap.querySelectorAll(".queued-crop").forEach(e => e.remove());
+  if (!cropMode?.multi) return;
+  for (const region of cropMode.regions.filter(r => r.page === pageNo)) {
+    const [x0, y0, x1, y1] = region.bbox;
+    const box = document.createElement("div");
+    box.className = "queued-crop";
+    Object.assign(box.style, {left: `${x0 * 100}%`, top: `${y0 * 100}%`,
+      width: `${(x1 - x0) * 100}%`, height: `${(y1 - y0) * 100}%`});
+    wrap.appendChild(box);
+  }
+}
+
+function renderMultiCropHint() {
+  if (!cropMode?.multi) return;
+  const count = cropMode.regions.length;
+  const pages = [...new Set(cropMode.regions.map(r => r.page))].join(", ");
+  $("cropHint").innerHTML = `<span>Q${esc(cropMode.label)} ${cropMode.part === "stem" ? "question" : "answer"}: ${count} area${count === 1 ? "" : "s"} selected${pages ? ` (page${pages.includes(",") ? "s" : ""} ${pages})` : ""}. ${count ? "Drag another box or run AI." : "Drag a box on the PDF, then move between pages as needed."}</span>
+    <button type="button" data-multi="run" ${count ? "" : "disabled"}>Run AI (Enter)</button>
+    <button type="button" data-multi="undo" ${count ? "" : "disabled"}>Undo last</button>
+    <button type="button" data-multi="cancel">Cancel (Esc)</button>`;
+}
+
+$("cropHint").addEventListener("click", e => {
+  const action = e.target.closest("[data-multi]")?.dataset.multi;
+  if (!cropMode?.multi || !action) return;
+  if (action === "cancel") endCrop();
+  else if (action === "undo") {
+    cropMode.regions.pop();
+    renderQueuedCrops();
+    renderMultiCropHint();
+  } else if (action === "run") runMultiExtract();
+});
 
 function startCrop(key, part) {
   cropMode = { key, part };
@@ -388,12 +433,18 @@ async function startImageCrop(key, part, name) {
     ? [manual.bbox[0] / size[0], manual.bbox[1] / size[1], manual.bbox[2] / size[0], manual.bbox[3] / size[1]] : null} : null;
   const source = [...(q.auto.imageCrops || []), ...(q.auto.sourceImages || []), manualSource]
     .filter(Boolean).find(item => item.name === name || item.file === name);
-  if (source?.page) await showPage(source.page, source.bbox ? [source] : undefined);
+  const box = source?.bbox;
+  if (source?.page && Array.isArray(box) && box.length === 4 &&
+      box[2] - box[0] >= .005 && box[3] - box[1] >= .005) {
+    await showPage(source.page, [source]);
+    return imageTextFromBox(key, part, name, box, source.page);
+  }
+  if (source?.page) await showPage(source.page);
   cropMode = {key, part, name, imageText: true};
   $("pageWrap").classList.add("cropping");
   $("cropHint").hidden = false;
-  $("cropHint").textContent = `Step 2/3: Drag over the text or formula on the PDF for Q${q.auto.label}. Release to run AI. Esc cancels.`;
-  toast("Step 1/3: Select the desired content on the PDF at left");
+  $("cropHint").textContent = `This image has no usable PDF position. Drag over it for Q${q.auto.label}; release to run AI. Esc cancels.`;
+  toast("Select this image on the PDF at left");
 }
 function startAddQuestion() {
   cropMode = { add: true };
@@ -412,40 +463,83 @@ async function startExtract(key, part) {
   $("cropHint").hidden = false;
   $("cropHint").textContent = `Draw a box to AI-read and replace Q${q.auto.label}'s ${part === 'stem' ? 'question' : 'answer'} text only — Esc to cancel`;
 }
+async function startMultiExtract(key, part) {
+  if (extractBusy) { toast("Wait for the current extraction to finish"); return; }
+  if (cropMode) { toast("Finish or cancel the current PDF selection first"); return; }
+  stashTextEdit();
+  clearTimeout(saveTimer);
+  if (!await save()) return;
+  const q = data.questions.find(q => q.key === key);
+  cropMode = {key, part, multi: true, label: q.auto.label, regions: []};
+  $("pageWrap").classList.add("cropping");
+  $("cropHint").hidden = false;
+  $("cropHint").classList.add("multi");
+  renderMultiCropHint();
+}
+function runMultiExtract() {
+  if (!cropMode?.multi || !cropMode.regions.length) return;
+  const {key, part, regions} = cropMode;
+  endCrop();
+  extractFromSelections(key, part, regions);
+}
 function endCrop() {
   cropMode = null;
   $("pageWrap").classList.remove("cropping");
   $("cropHint").hidden = true;
+  $("cropHint").classList.remove("multi");
   $("pageWrap").querySelectorAll(".selbox").forEach(e => e.remove());
+  renderQueuedCrops();
 }
-document.addEventListener("keydown", e => { if (e.key === "Escape" && cropMode) endCrop(); });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && cropMode) endCrop();
+  else if (e.key === "Enter" && cropMode?.multi && !e.repeat &&
+           !["TEXTAREA", "INPUT"].includes(document.activeElement?.tagName)) {
+    e.preventDefault();
+    runMultiExtract();
+  }
+});
 
 $("pageWrap").addEventListener("mousedown", e => {
   if (!cropMode) return;
   const selection = cropMode, selectedPage = pageNo;
   e.preventDefault();
-  const wrap = $("pageWrap"), rect = wrap.getBoundingClientRect();
-  const sx = e.clientX - rect.left, sy = e.clientY - rect.top;
+  const wrap = $("pageWrap");
+  const clamp = value => Math.max(0, Math.min(1, value));
+  const point = ev => {
+    const rect = wrap.getBoundingClientRect();
+    return [clamp((ev.clientX - rect.left) / rect.width),
+            clamp((ev.clientY - rect.top) / rect.height)];
+  };
+  const [sx, sy] = point(e);
   const box = document.createElement("div");
   box.className = "selbox";
   wrap.appendChild(box);
   const draw = ev => {
-    const x = Math.max(0, Math.min(rect.width, ev.clientX - rect.left));
-    const y = Math.max(0, Math.min(rect.height, ev.clientY - rect.top));
-    Object.assign(box.style, { left: Math.min(sx, x) + "px", top: Math.min(sy, y) + "px",
-      width: Math.abs(x - sx) + "px", height: Math.abs(y - sy) + "px" });
+    const [x, y] = point(ev);
+    Object.assign(box.style, { left: `${Math.min(sx, x) * 100}%`, top: `${Math.min(sy, y) * 100}%`,
+      width: `${Math.abs(x - sx) * 100}%`, height: `${Math.abs(y - sy) * 100}%` });
+    return [Math.min(sx, x), Math.min(sy, y), Math.max(sx, x), Math.max(sy, y)];
   };
   const finish = async ev => {
     document.removeEventListener("mousemove", draw);
     document.removeEventListener("mouseup", finish);
-    if (cropMode !== selection) { box.remove(); return; }
-    draw(ev);
-    const b = box.getBoundingClientRect();
-    const bbox = [(b.left - rect.left) / rect.width, (b.top - rect.top) / rect.height,
-                  (b.right - rect.left) / rect.width, (b.bottom - rect.top) / rect.height];
+    if (cropMode !== selection || pageNo !== selectedPage) { box.remove(); return; }
+    const bbox = draw(ev);
     const { key, part, add, extract, imageText, name } = selection;
+    box.remove();
+    if ((bbox[2] - bbox[0]) * wrap.clientWidth < 8 ||
+        (bbox[3] - bbox[1]) * wrap.clientHeight < 8) {
+      if (!selection.multi) endCrop();
+      toast("That selection was too small"); return;
+    }
+    if (selection.multi) {
+      if (selection.regions.length >= 8) { toast("Maximum 8 areas; run AI or undo one"); return; }
+      selection.regions.push({page: selectedPage, bbox});
+      renderQueuedCrops();
+      renderMultiCropHint();
+      return;
+    }
     endCrop();
-    if (b.width < 8 || b.height < 8) { toast("That selection was too small"); return; }
     if (add) return addQuestionFromBox(bbox, selectedPage);
     if (imageText) return imageTextFromBox(key, part, name, bbox, selectedPage);
     if (extract) return extractFromBox(key, part, bbox, selectedPage);
@@ -491,13 +585,16 @@ async function addQuestionFromBox(bbox, page = pageNo) {
 }
 
 async function extractFromBox(key, part, bbox, page) {
+  return extractFromSelections(key, part, [{page, bbox}]);
+}
+async function extractFromSelections(key, part, regions) {
   extractBusy = { key, part };
   drawQuestions({ anchorKey: key });
-  toast(`AI reading the selected ${part === 'stem' ? 'question' : 'answer'} box…`);
+  toast(`AI reading ${regions.length} selected ${part === 'stem' ? 'question' : 'answer'} area${regions.length === 1 ? '' : 's'}…`);
   try {
     const r = await fetch(`/api/jobs/${jobId}/questions/${encodeURIComponent(key)}/extract`, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ part, page, bbox }) });
+      body: JSON.stringify(regions.length === 1 ? {part, ...regions[0]} : {part, regions}) });
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || r.statusText);
     stashTextEdit();
@@ -507,7 +604,7 @@ async function extractFromBox(key, part, bbox, page) {
     const warnings = [];
     if (j.katexErrors?.length) warnings.push(`${j.katexErrors.length} maths piece(s) need checking`);
     if (j.missingFigures) warnings.push('check the retained crop for any missing diagrams');
-    toast(`${part === 'stem' ? 'Question' : 'Answer'} text replaced from the selected box` + (warnings.length ? ` — ${warnings.join('; ')}` : ''));
+    toast(`${part === 'stem' ? 'Question' : 'Answer'} text replaced from ${regions.length} selected area${regions.length === 1 ? '' : 's'}` + (warnings.length ? ` — ${warnings.join('; ')}` : ''));
   } catch (e) { toast('Could not extract: ' + e.message); }
   extractBusy = null;
   drawQuestions({ anchorKey: key });
@@ -538,7 +635,7 @@ async function fixLatex(key, part) {
 async function imageTextFromBox(key, part, name, bbox, page) {
   imageBusy = {key, name};
   drawQuestions({anchorKey: key});
-  toast("Step 3/3: AI is reading the selected PDF area…");
+  toast("AI is reading the image…");
   try {
     const r = await fetch(`/api/jobs/${jobId}/questions/${encodeURIComponent(key)}/image-text`, {
       method: "POST", headers: {"Content-Type": "application/json"},
@@ -653,11 +750,30 @@ async function reloadReview() {
 function drawProgress() {
   drawWorkflow();
   const counts = { done: 0, need: 0, flag: 0, skip: 0 };
-  data.questions.forEach(q => counts[status(q)]++);
+  const linked = { need: [], flag: [] };
+  data.questions.forEach(q => {
+    const state = status(q);
+    counts[state]++;
+    if (linked[state]) linked[state].push(q);
+  });
+  const linksFor = state => linked[state].map(q => `<button type="button" class="question-link ${state}" data-question-key="${esc(q.key)}"
+    title="Open ${esc(q.auto.exercise || 'question')} Q ${esc(q.auto.label)} on PDF page ${esc(questionStartPage(q) || '?')}">Q ${esc(q.auto.label)}</button>`).join(", ");
+  const needLinks = linksFor("need"), flaggedLinks = linksFor("flag");
   $("progress").innerHTML = `<b>${counts.done}</b> of ${data.questions.length - counts.skip} ready · ` +
-    `<span style="color:var(--warn)">${counts.need} need input</span> · <span style="color:var(--err)">${counts.flag} flagged</span>`;
+    `<span style="color:var(--warn)">${counts.need} need input${needLinks ? ` (${needLinks})` : ''}</span> · <span style="color:var(--err)">${counts.flag} flagged${flaggedLinks ? ` (${flaggedLinks})` : ''}</span>`;
   return counts;
 }
+
+$("progress").addEventListener("click", e => {
+  const link = e.target.closest("[data-question-key]");
+  if (!link) return;
+  const q = data.questions.find(q => q.key === link.dataset.questionKey);
+  if (!q) return;
+  tab = "questions";
+  filter = "all";
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("on", t.dataset.tab === tab));
+  openQuestion(q.key);
+});
 
 function draw() {
   document.querySelectorAll(".tab").forEach(t => t.classList.toggle("on", t.dataset.tab === tab));
@@ -673,6 +789,7 @@ const DOC_FORM = [
     ["module", "Module", "documentChoice", null],
     ["chapter", "Chapter", "documentChoice", null],
     ["subject", "Subject", "documentChoice", null],
+    ["className", "Class name", "text", "e.g. Class 10 — included in the exported JSON and database records"],
     ["exam", "Exam name", "exam", "Applies to this chapter; PYQ exam is set separately below."],
     ["section", "Path section", "text", "e.g. All sections"],
   ]],
@@ -839,7 +956,8 @@ function questionBody(q) {
         <button class="ghost" data-act="crop-stem" title="Drag a box on the PDF to add that part of the page as an image in the question">✂ Crop → question</button>
         <button class="ghost" data-act="crop-sol" title="Drag a box on the PDF to add that part of the page as an image in the answer">✂ Crop → answer</button>
         ${data.aiAvailable ? `<button class="ghost" data-act="extract-stem" ${extractBusy ? 'disabled' : ''} title="Draw a PDF box; AI replaces only this question's question text">${extractBusy?.key === q.key && extractBusy.part === 'stem' ? 'Reading question…' : '✨ Extract → question'}</button>
-        <button class="ghost" data-act="extract-sol" ${extractBusy ? 'disabled' : ''} title="Draw a PDF box; AI replaces only this question's answer text">${extractBusy?.key === q.key && extractBusy.part === 'sol' ? 'Reading answer…' : '✨ Extract → answer'}</button>` : ''}
+        <button class="ghost" data-act="extract-sol" ${extractBusy ? 'disabled' : ''} title="Draw a PDF box; AI replaces only this question's answer text">${extractBusy?.key === q.key && extractBusy.part === 'sol' ? 'Reading answer…' : '✨ Extract → answer'}</button>
+        <button class="ghost" data-act="multi-extract-sol" ${extractBusy ? 'disabled' : ''} title="Select up to 8 answer areas across PDF pages, then transcribe them together">✨ Multi-crop → answer</button>` : ''}
         ${data.aiAvailable ? `<button class="ghost" data-act="ai" ${busy ? "disabled" : ""} title="Sends the highlighted box to the AI and replaces the question and solution text with its reading">${busy ? "Reading with AI…" : "✨ Re-read with AI"}</button>` : ""}
         ${data.aiAvailable ? `<button class="ghost" data-act="latex-stem" ${latexBusy ? 'disabled' : ''} title="Repair only this question's formulas and broken symbols using the original PDF">${latexBusy?.key === q.key && latexBusy.part === 'stem' ? 'Fixing question…' : '✨ Fix question LaTeX'}</button>
         <button class="ghost" data-act="latex-sol" ${latexBusy ? 'disabled' : ''} title="Repair only this answer's formulas and broken symbols using the original PDF">${latexBusy?.key === q.key && latexBusy.part === 'sol' ? 'Fixing answer…' : '✨ Fix answer LaTeX'}</button>` : ''}
@@ -957,6 +1075,8 @@ async function questionAction(btn) {
     toast("Image removed — ↺ Reset to automatic brings it back");
   } else if (a === "extract-stem" || a === "extract-sol") {
     startExtract(q.key, a === 'extract-stem' ? 'stem' : 'sol');
+  } else if (a === "multi-extract-sol") {
+    startMultiExtract(q.key, 'sol');
     return;
   } else if (a === "latex-stem" || a === "latex-sol") {
     await fixLatex(q.key, a === 'latex-stem' ? 'stem' : 'sol');
@@ -1119,7 +1239,13 @@ $("rereadBtn").onclick = async () => {
   $("addQBtn").onclick = startAddQuestion;
   setUpMongo();
   draw();
-  loadPdf().catch(e => { $("pgLabel").textContent = "Could not load PDF"; });
+  try {
+    await loadPdf();
+    if (requestedQuestionKey && data.questions.some(q => q.key === requestedQuestionKey)) {
+      editKey = requestedQuestionKey;
+      openQuestion(requestedQuestionKey);
+    }
+  } catch (e) { $("pgLabel").textContent = "Could not load PDF"; }
 })();
 </script>
 </body>

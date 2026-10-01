@@ -4,6 +4,7 @@
 """
 
 import io
+import hashlib
 import json
 import os
 import queue
@@ -56,6 +57,44 @@ def _iter_job_dirs():
                 yield directory
 
 
+def _pdf_sha256(path):
+    digest = hashlib.sha256()
+    with Path(path).open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _duplicate_pdf(sha256, size, filename):
+    """Find an existing PDF before creating another Drive file or OCR session."""
+    possible_name_match = None
+    for directory in _iter_job_dirs():
+        meta_path = directory / "meta.json"
+        try:
+            meta = json.loads(meta_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            meta = {}
+        old_name = Path(meta.get("filename") or "").name
+        old_hash = meta.get("pdfSha256")
+        old_source = _source_path(directory.name)
+        if not old_source.is_file():
+            old_source = directory / "input.pdf"
+        if not old_hash and old_source.is_file():
+            try:
+                if old_source.stat().st_size == size:
+                    old_hash = _pdf_sha256(old_source)
+            except OSError:
+                pass
+        if old_hash:
+            if old_hash == sha256:
+                return {"job_id": directory.name, "filename": old_name or filename, "match": "content"}
+        elif old_name.casefold() == filename.casefold() and possible_name_match is None:
+            # Older sessions can outlive their temporary local PDF. Warn on their
+            # filename, but say it is only a possible match.
+            possible_name_match = {"job_id": directory.name, "filename": old_name, "match": "filename"}
+    return possible_name_match
+
+
 # PDFs are source material, not project data.  They live outside the checkout only
 # for as long as the local extractor/review viewer needs them.
 TEMP_INPUT_DIR = Path(tempfile.gettempdir()) / "ocr-extraction-inputs"
@@ -102,9 +141,20 @@ def _source_path(job_id, job=None):
 def _link_source(job_id, source):
     """Expose a temporary source to legacy review code without storing it in the repo."""
     link = _job_dir(job_id) / "input.pdf"
+    if link.exists() and link.samefile(source):
+        return
     if link.is_symlink() or link.exists():
         link.unlink()
-    link.symlink_to(source)
+    try:
+        link.symlink_to(source)
+    except OSError:
+        # Windows commonly denies symbolic links to non-admin processes.
+        # Both paths normally reside in system temp, so a hard link works
+        # without another copy of the PDF.
+        try:
+            os.link(source, link)
+        except OSError:
+            shutil.copyfile(source, link)
 
 
 def _ensure_source(job_id, job=None):
@@ -130,10 +180,13 @@ def _ensure_source(job_id, job=None):
 
 
 def _discard_source(job_id, job=None):
-    """Remove only the system-temp copy and its repository symlink."""
+    """Remove the system-temp copy and any temporary review link."""
     source = _source_path(job_id, job)
     link = _job_dir(job_id) / "input.pdf"
     removed = False
+    temporary_link = link.is_symlink() or (link.parent == JOBS_DIR / job_id
+                                           and source.is_relative_to(TEMP_INPUT_DIR)
+                                           and link.exists())
     try:
         if source.is_relative_to(TEMP_INPUT_DIR) and source.exists():
             source.unlink()
@@ -141,7 +194,7 @@ def _discard_source(job_id, job=None):
     except OSError:
         pass
     try:
-        if link.is_symlink():
+        if temporary_link:
             link.unlink()
     except OSError:
         pass
@@ -271,6 +324,11 @@ def upload():
         # The browser posts to this local server, which immediately files the PDF
         # in Drive. The only local copy is this system-temporary processing file.
         f.save(source)
+        pdf_hash = _pdf_sha256(source)
+        duplicate = _duplicate_pdf(pdf_hash, source.stat().st_size, Path(f.filename).name)
+        if duplicate and request.form.get("allowDuplicate") != "1":
+            source.unlink(missing_ok=True)
+            return jsonify(error="This PDF was uploaded before", duplicate=duplicate), 409
         import ocr_store
         session_id = job_id
         ocr_store.create_session(session_id, f"OCR · {Path(f.filename).name}",
@@ -291,7 +349,7 @@ def upload():
     _save_meta(job_id, {  # source data stays in Drive; only its id/path are recorded locally
         "filename": Path(f.filename).name, "latex": request.form.get("latex") == "1" or want_ai,
         "ai": want_ai, "sessionId": session_id, "projectId": request.form.get("projectId") or None,
-        "driveFileId": drive_file_id, "tempPdf": str(source)})
+        "driveFileId": drive_file_id, "tempPdf": str(source), "pdfSha256": pdf_hash})
     jobs[job_id] = {
         "id": job_id, "filename": Path(f.filename).name,
         "latex": request.form.get("latex") == "1" or want_ai, "ai": want_ai,
@@ -685,6 +743,11 @@ def job_question_extract(job_id, key):
         return jsonify(error="OPENAI_API_KEY_2 is not set on the server"), 400
     body = request.get_json(silent=True) or {}
     try:
+        if "regions" in body:
+            regions = body["regions"]
+            if not isinstance(regions, list):
+                raise ValueError("regions must be a list of PDF selections")
+            return jsonify(review.extract_regions(_job_dir(job_id), key, body.get("part"), regions))
         return jsonify(review.extract_region(_job_dir(job_id), key, body.get("part"), int(body.get("page", 0)),
                                              [float(v) for v in body.get("bbox", [])]))
     except KeyError:
@@ -1113,6 +1176,44 @@ def job_image(job_id, name):
     return send_from_directory(_job_dir(job_id) / "out" / "images", name, max_age=86400)
 
 
+def _resume_incomplete_uploads():
+    """Resume Drive-backed PDFs whose extraction was interrupted."""
+    import ocr_store
+
+    resumed = 0
+    for directory in _iter_job_dirs():
+        job_id = directory.name
+        source = TEMP_INPUT_DIR / f"{job_id}.pdf"
+        if (directory.parent != JOBS_DIR or job_id in jobs
+                or (directory / "out" / "structured.json").is_file()):
+            continue
+        try:
+            session = ocr_store.get_session(job_id)
+            if not session or not session.get("driveFileId") or session.get("status") != "extracting":
+                continue
+            meta_path = directory / "meta.json"
+            if meta_path.is_file():
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+            else:
+                if not source.is_file():
+                    continue
+                label = session.get("label") or ""
+                filename = label.partition(" · ")[2] or f"{job_id}.pdf"
+                meta = {"filename": filename, "latex": True, "ai": ai_fallback.available(),
+                        "sessionId": job_id, "projectId": session.get("projectId"),
+                        "driveFileId": session["driveFileId"], "tempPdf": str(source),
+                        "pdfSha256": _pdf_sha256(source)}
+                _link_source(job_id, source)
+                _save_meta(job_id, meta)
+            jobs[job_id] = {"id": job_id, **meta, "status": "queued",
+                            "stage": "waiting in queue", "done": 0, "total": 0, "error": None}
+            work.put(job_id)
+            resumed += 1
+        except Exception as error:
+            print(f"Could not resume upload {job_id}: {error}", file=sys.stderr)
+    return resumed
+
+
 if __name__ == "__main__":
     from werkzeug.serving import WSGIRequestHandler
     # keep-alive: a result page loads hundreds of small images
@@ -1124,4 +1225,7 @@ if __name__ == "__main__":
                            if os.environ.get("MONGODB_URI")
                            else "not configured - add MONGODB_URI to .env to push from the app"))
     print("Open http://127.0.0.1:5000")
+    resumed = _resume_incomplete_uploads()
+    if resumed:
+        print(f"Resumed {resumed} PDFs already uploaded to Drive")
     app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)
